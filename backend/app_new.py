@@ -202,7 +202,7 @@ async def analyze_image(file: UploadFile = File(...)):
         
         # Step 2: Classify blocks
         logger.debug("Classifying blocks...")
-        typed_blocks = classify_blocks(_model, image_bgr, geometric_blocks)
+        typed_blocks = classify_blocks(image_bgr, geometric_blocks, _model)
         logger.info(f"Classified {len(typed_blocks)} blocks")
         
         # Step 3: Build ILS
