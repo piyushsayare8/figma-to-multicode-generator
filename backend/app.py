@@ -35,10 +35,10 @@ from utils import style_analyzer
 from utils import ils_builder
 from utils.generators import tailwind_gen
 
-# Legacy generators (to be upgraded in future)
-from utils import generator_html_css_enhanced
-from utils import generator_react_enhanced
-from utils import generator_flutter_enhanced
+# Legacy generators
+from utils.generator_html_css_enhanced import generate_plain_html_and_css
+from utils.generator_react_enhanced import generate_react_component
+from utils.generator_flutter_enhanced import generate_flutter_code
 
 # Configure logging
 logging.basicConfig(
@@ -280,22 +280,10 @@ async def analyze_ui(
         # New ILS v2 generator (Tailwind)
         tailwind_code = tailwind_gen.generate_tailwind_code(ils)
         
-        # Legacy generators (will be upgraded)
-        # For now, convert ILS v2 to old format for compatibility
-        legacy_layout = convert_ils_to_legacy(typed_blocks)
-        legacy_ils = {"sections": [{"type": "content", "elements": []}]}
-        
-        html_css_code = generator_html_css_enhanced.generate_html_css(
-            legacy_layout, legacy_ils, style_info
-        )
-        
-        react_code = generator_react_enhanced.generate_react(
-            legacy_layout, legacy_ils, style_info
-        )
-        
-        flutter_code = generator_flutter_enhanced.generate_flutter(
-            legacy_layout, legacy_ils, style_info
-        )
+        # Legacy generators (work with ILS dict)
+        html_code, css_code = generate_plain_html_and_css(ils)
+        react_code = generate_react_component(ils)
+        flutter_code = generate_flutter_code(ils)
         
         logger.info("✓ All code generated")
         
@@ -312,13 +300,13 @@ async def analyze_ui(
                 "fallback_classifications": fallback_count,
                 "sections_detected": len(ils.get("children", []))
             },
-            "layout": legacy_layout,  # For backward compatibility
+            "layout": convert_ils_to_legacy(typed_blocks),  # For backward compatibility
             "ils": ils,  # New ILS v2 tree
             "style": style_info,
             "outputs": {
                 "html_tailwind": tailwind_code,
-                "html_plain": html_css_code.get("html", ""),
-                "css": html_css_code.get("css", ""),
+                "html_plain": html_code,
+                "css": css_code,
                 "react": react_code,
                 "dart": flutter_code
             }
