@@ -21,5 +21,5 @@ if (Test-Path "requirements.txt") {
 pip install uvicorn
 
 # Run the FastAPI server
-Write-Host "Starting FastAPI backend..."
-uvicorn app_new:app --reload --host 0.0.0.0 --port 8000
+Write-Host "Starting ADVANCED Figma to Multicode Generator (Pixel-Perfect Mode)..." -ForegroundColor Green
+uvicorn app_advanced:app --reload --host 0.0.0.0 --port 8000
