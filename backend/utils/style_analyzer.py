@@ -644,39 +644,58 @@ def estimate_typography_scale(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
 # MAIN ANALYSIS FUNCTION
 # ============================================================================
 
-def analyze_style(image_bgr: np.ndarray, typed_blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
+def analyze_style(image_bgr: np.ndarray, typed_blocks: List[Any]) -> Dict[str, Any]:
     """
     Perform complete style analysis on image and blocks.
     
+    This is the main entry point matching ILS v2 requirements.
+    Works with TypedBlock objects from classifier.py.
+    
     Args:
         image_bgr: Input image in BGR format
-        typed_blocks: List of blocks with x, y, w, h, type, confidence
+        typed_blocks: List of TypedBlock objects from classifier
         
     Returns:
         Dict with structure:
         {
             "page": {
-                "background_color": str,
-                "primary_color": str,
-                "accent_color": str,
-                "text_color": str,
-                "base_spacing": int,
-                "layout_mode": str,
-                "column_count": int
+                "background_color": "#RRGGBB",
+                "primary_color": "#RRGGBB",
+                "accent_color": "#RRGGBB",
+                "text_color": "#RRGGBB",
+                "base_spacing": int  # pixels (8, 12, 16, etc.)
             },
             "blocks": [
                 {
                     "id": str,
-                    "rect": {...},
                     "type": str,
-                    "style": {...}
+                    "rect": {"x": int, "y": int, "w": int, "h": int},
+                    "style": {
+                        "background_color": "#RRGGBB" or None,
+                        "text_color": "#RRGGBB" or None,
+                        "border_radius": int or None,  # pixels
+                        "font_scale": "title"|"heading"|"body"|"caption" or None,
+                        "variant": "solid"|"outline"|"ghost" or None
+                    }
                 },
                 ...
-            ],
-            "typography": {...}
+            ]
         }
     """
     logger.info(f"Analyzing style for {len(typed_blocks)} blocks")
+    
+    # Convert TypedBlock objects to dict format for internal functions
+    blocks_dict = []
+    for block in typed_blocks:
+        blocks_dict.append({
+            'x': block.x,
+            'y': block.y,
+            'w': block.w,
+            'h': block.h,
+            'type': block.type,
+            'confidence': block.confidence,
+            'id': block.id
+        })
     
     # 1. Extract dominant colors
     dominant_colors = extract_dominant_colors(image_bgr)
@@ -690,46 +709,49 @@ def analyze_style(image_bgr: np.ndarray, typed_blocks: List[Dict[str, Any]]) -> 
     color_roles = assign_color_roles(dominant_colors, background_color)
     
     # 4. Estimate spacing
-    base_spacing = estimate_base_spacing(typed_blocks)
-    spacing_scale = estimate_spacing_scale(typed_blocks)
+    base_spacing = estimate_base_spacing(blocks_dict)
     
-    # 5. Detect layout mode
-    img_h, img_w = image_bgr.shape[:2]
-    layout_info = detect_column_layout(typed_blocks, img_w)
-    
-    # 6. Analyze typography
-    typography = estimate_typography_scale(typed_blocks)
-    
-    # 7. Analyze per-block styles
+    # 5. Analyze per-block styles
     styled_blocks = []
-    for idx, block in enumerate(typed_blocks):
-        block_style = analyze_block_style(image_bgr, block)
+    for block in typed_blocks:
+        rect = {'x': block.x, 'y': block.y, 'w': block.w, 'h': block.h}
+        block_style_raw = analyze_block_style(image_bgr, rect)
         
+        # Estimate font scale based on block type and height
+        font_scale = None
+        if block.type in ['heading']:
+            font_scale = "title" if block.h > 40 else "heading"
+        elif block.type in ['text_block', 'link']:
+            font_scale = "body" if block.h > 20 else "caption"
+        elif block.type in ['button']:
+            font_scale = "body"
+        
+        # Format style to match ILS v2 expectations
         styled_block = {
-            "id": f"block_{idx}",
-            "rect": {
-                "x": block['x'],
-                "y": block['y'],
-                "w": block['w'],
-                "h": block['h']
-            },
-            "type": block.get('type', 'unknown'),
-            "confidence": block.get('confidence', 0.0),
-            "style": block_style
+            "id": block.id,
+            "type": block.type,
+            "rect": rect,
+            "style": {
+                "background_color": block_style_raw.get("bg_color"),
+                "text_color": block_style_raw.get("text_color"),
+                "border_radius": block_style_raw.get("border_radius"),
+                "font_scale": font_scale,
+                "variant": block_style_raw.get("variant")
+            }
         }
         
         styled_blocks.append(styled_block)
     
-    # 8. Compile complete style summary
+    # 6. Compile complete style summary (ILS v2 format)
     style_summary = {
         "page": {
-            **color_roles,
-            "base_spacing": base_spacing,
-            "spacing_scale": spacing_scale,
-            **layout_info
+            "background_color": color_roles.get("background_color", "#f3f4f6"),
+            "primary_color": color_roles.get("primary_color", "#2563eb"),
+            "accent_color": color_roles.get("accent_color", "#f59e0b"),
+            "text_color": color_roles.get("text_color", "#111827"),
+            "base_spacing": base_spacing
         },
-        "blocks": styled_blocks,
-        "typography": typography
+        "blocks": styled_blocks
     }
     
     logger.info("Style analysis complete")

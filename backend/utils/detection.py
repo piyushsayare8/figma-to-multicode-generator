@@ -183,6 +183,118 @@ def merge_block_group(blocks: List[Dict[str, int]]) -> Dict[str, int]:
         'h': y_max - y_min
     }
 
+def cluster_rows(blocks: List[Dict[str, int]], row_gap_threshold: int = 20) -> List[List[Dict[str, int]]]:
+    """
+    Group blocks into rows based on vertical proximity.
+    
+    Args:
+        blocks: List of block dictionaries with x, y, w, h keys
+        row_gap_threshold: Maximum vertical gap to consider blocks in same row
+        
+    Returns:
+        List of rows, where each row is a list of blocks
+        
+    Examples:
+        >>> blocks = [{'x': 10, 'y': 10, 'w': 50, 'h': 20}, ...]
+        >>> rows = cluster_rows(blocks, row_gap_threshold=15)
+        >>> print(f"Found {len(rows)} rows")
+    """
+    if not blocks:
+        return []
+    
+    # Sort by y-coordinate first
+    sorted_blocks = sorted(blocks, key=lambda b: b['y'])
+    
+    rows = []
+    current_row = [sorted_blocks[0]]
+    current_row_bottom = sorted_blocks[0]['y'] + sorted_blocks[0]['h']
+    
+    for block in sorted_blocks[1:]:
+        block_top = block['y']
+        
+        # Check if this block is close enough to current row
+        gap = block_top - current_row_bottom
+        
+        if gap <= row_gap_threshold:
+            # Add to current row
+            current_row.append(block)
+            # Update row bottom to be the maximum bottom of all blocks in row
+            block_bottom = block['y'] + block['h']
+            current_row_bottom = max(current_row_bottom, block_bottom)
+        else:
+            # Start new row
+            rows.append(current_row)
+            current_row = [block]
+            current_row_bottom = block['y'] + block['h']
+    
+    # Add last row
+    if current_row:
+        rows.append(current_row)
+    
+    # Sort blocks within each row by x-coordinate (left to right)
+    for row in rows:
+        row.sort(key=lambda b: b['x'])
+    
+    logger.debug(f"Clustered {len(blocks)} blocks into {len(rows)} rows")
+    return rows
+
+
+def cluster_columns(blocks: List[Dict[str, int]], col_gap_threshold: int = 20) -> List[List[Dict[str, int]]]:
+    """
+    Group blocks into columns based on horizontal proximity.
+    
+    Args:
+        blocks: List of block dictionaries with x, y, w, h keys
+        col_gap_threshold: Maximum horizontal gap to consider blocks in same column
+        
+    Returns:
+        List of columns, where each column is a list of blocks
+        
+    Examples:
+        >>> blocks = [{'x': 10, 'y': 10, 'w': 50, 'h': 20}, ...]
+        >>> cols = cluster_columns(blocks, col_gap_threshold=15)
+        >>> print(f"Found {len(cols)} columns")
+    """
+    if not blocks:
+        return []
+    
+    # Sort by x-coordinate first
+    sorted_blocks = sorted(blocks, key=lambda b: b['x'])
+    
+    columns = []
+    current_col = [sorted_blocks[0]]
+    current_col_right = sorted_blocks[0]['x'] + sorted_blocks[0]['w']
+    
+    for block in sorted_blocks[1:]:
+        block_left = block['x']
+        
+        # Check if this block is close enough to current column
+        gap = block_left - current_col_right
+        
+        if gap <= col_gap_threshold:
+            # Add to current column
+            current_col.append(block)
+            # Update column right to be the maximum right of all blocks in column
+            block_right = block['x'] + block['w']
+            current_col_right = max(current_col_right, block_right)
+        else:
+            # Start new column
+            columns.append(current_col)
+            current_col = [block]
+            current_col_right = block['x'] + block['w']
+    
+    # Add last column
+    if current_col:
+        columns.append(current_col)
+    
+    # Sort blocks within each column by y-coordinate (top to bottom)
+    for col in columns:
+        col.sort(key=lambda b: b['y'])
+    
+    logger.debug(f"Clustered {len(blocks)} blocks into {len(columns)} columns")
+    return columns
+
+
 def detect_blocks(image_bgr: np.ndarray) -> List[Dict[str, int]]:
     """
     Detect rectangular UI blocks in the image using OpenCV.
@@ -199,6 +311,7 @@ def detect_blocks(image_bgr: np.ndarray) -> List[Dict[str, int]]:
         
     Returns:
         List of detected blocks, each with keys: x, y, w, h
+        Blocks are sorted by position (top-to-bottom, left-to-right reading order)
         
     Raises:
         ValueError: If image is invalid or empty

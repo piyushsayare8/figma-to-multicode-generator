@@ -1,654 +1,823 @@
 """
-Intermediate Layout Schema (ILS) Builder - UPGRADED.
+ILS v2: Intermediate Layout Schema - Tree-Based, Layout-Aware, Semantic
 
-This module converts classified UI blocks + style info into a structured 
-intermediate representation that can be used to generate code across 
-multiple frameworks.
+This module builds a hierarchical tree representation of UI layouts from
+detected and classified blocks. The tree structure enables better code
+generation with proper nesting, semantic sections, and layout modes.
 
-Now includes:
-  - Page-level style (colors, spacing, layout_mode)
-  - Section-level style (padding, gap, alignment, border_radius)
-  - Integration with style_analyzer.py output
+Architecture:
+- ILSNode: Base tree node with layout, style, and children
+- Section detection: navbar, hero, form, cards, sidebar, footer
+- Layout modes: vertical, horizontal, grid, absolute
+- Style integration: colors, spacing, typography from style_analyzer
+
+Author: Figma to Multicode Generator Team
+Version: 2.0
 """
 
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 from enum import Enum
-
-from config import Config, ILS_VERSION, DEFAULT_PAGE_TITLE
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
-class SectionType(Enum):
-    """Enumeration of supported section types."""
+
+# ============================================================================
+# ENUMS
+# ============================================================================
+
+class NodeType(str, Enum):
+    """Types of ILS nodes."""
+    PAGE = "page"
+    SECTION = "section"
+    NAVBAR = "navbar"
+    SIDEBAR = "sidebar"
+    HERO = "hero"
     FORM = "form"
     CARDS = "cards"
-    HERO = "hero"
-    HEADER = "header"
     FOOTER = "footer"
-    NAVIGATION = "navigation"
-    CONTENT = "content"
-    GALLERY = "gallery"
-    UNKNOWN = "unknown"
-
-class ElementType(Enum):
-    """Enumeration of supported UI element types."""
-    TEXT_INPUT = "text_input"
-    PASSWORD_INPUT = "password_input"
-    EMAIL_INPUT = "email_input"
-    BUTTON = "button"
-    LINK = "link"
+    FRAME = "frame"
     TEXT_BLOCK = "text_block"
+    HEADING = "heading"
+    BUTTON = "button"
+    INPUT_FIELD = "input_field"
+    PASSWORD_INPUT = "password_input"
     IMAGE_BLOCK = "image_block"
     CARD = "card"
-    CHECKBOX = "checkbox"
-    RADIO_BUTTON = "radio_button"
-    SELECT_DROPDOWN = "select_dropdown"
-    TEXTAREA = "textarea"
-    LABEL = "label"
+    LINK = "link"
+    UNKNOWN = "unknown"
+
+
+class LayoutMode(str, Enum):
+    """Layout modes for containers."""
+    VERTICAL = "vertical"      # flex-col
+    HORIZONTAL = "horizontal"  # flex-row
+    GRID = "grid"             # grid
+    ABSOLUTE = "absolute"     # absolute positioning
+
+
+class Role(str, Enum):
+    """Semantic roles for elements."""
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+    CTA = "cta"              # Call to action
+    HIGHLIGHT = "highlight"
+    NEUTRAL = "neutral"
+
+
+# ============================================================================
+# DATA STRUCTURES
+# ============================================================================
 
 @dataclass
-class UIElement:
-    """Represents a single UI element in the ILS."""
-    type: str
-    label: Optional[str] = None
-    name: Optional[str] = None
-    placeholder: Optional[str] = None
-    value: Optional[str] = None
-    required: bool = False
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary, excluding None values."""
-        return {k: v for k, v in asdict(self).items() if v is not None}
-
-@dataclass
-class Section:
-    """Represents a section of the UI (form, cards, etc.) with style."""
-    type: str
-    id: str
-    title: Optional[str] = None
-    elements: List[UIElement] = None
-    primary_action: Optional[UIElement] = None
-    secondary_actions: List[UIElement] = None
-    style: Optional[Dict[str, Any]] = None  # NEW: section-level style
-    fields: List[Dict[str, Any]] = None      # NEW: for forms (alias of elements)
-    cards: List[Dict[str, Any]] = None       # NEW: for card sections
-    
-    def __post_init__(self):
-        if self.elements is None:
-            self.elements = []
-        if self.secondary_actions is None:
-            self.secondary_actions = []
-        if self.style is None:
-            self.style = {}
-        if self.fields is None:
-            self.fields = []
-        if self.cards is None:
-            self.cards = []
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
-        result = {
-            "type": self.type,
-            "id": self.id
-        }
-        
-        if self.title:
-            result["title"] = self.title
-        
-        # Style is always included now
-        if self.style:
-            result["style"] = self.style
-            
-        # Use 'fields' for forms, 'elements' for generic
-        if self.type == SectionType.FORM.value and self.elements:
-            result["fields"] = [elem.to_dict() for elem in self.elements]
-        elif self.elements:
-            result["elements"] = [elem.to_dict() for elem in self.elements]
-        
-        # Use 'cards' for card sections
-        if self.type == SectionType.CARDS.value and self.cards:
-            result["cards"] = self.cards
-            
-        if self.primary_action:
-            result["primary_action"] = self.primary_action.to_dict()
-            
-        if self.secondary_actions:
-            result["secondary_actions"] = [action.to_dict() for action in self.secondary_actions]
-            
-        return result
-
-@dataclass
-class ILS:
-    """Intermediate Layout Schema representation with style."""
-    version: str = ILS_VERSION
-    type: str = "page"
-    title: str = DEFAULT_PAGE_TITLE
-    layout_mode: str = "single_column"  # NEW: single_column | two_column | grid | centered_form
-    style: Optional[Dict[str, Any]] = None  # NEW: page-level style
-    sections: List[Section] = None
-    
-    def __post_init__(self):
-        if self.sections is None:
-            self.sections = []
-        if self.style is None:
-            self.style = {}
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
-        result = {
-            "version": self.version,
-            "type": self.type,
-            "title": self.title,
-            "layout_mode": self.layout_mode
-        }
-        
-        # Include page-level style
-        if self.style:
-            result["style"] = self.style
-        
-        result["sections"] = [section.to_dict() for section in self.sections]
-        
-        return result
-
-class ILSBuilder:
-    """Builder class for constructing ILS from classified blocks."""
-    
-    def __init__(self):
-        self.blocks = []
-        self.sections = []
-        
-    def analyze_layout_patterns(self, blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Analyze blocks to identify common layout patterns with improved detection.
-        
-        Returns:
-            Dictionary containing layout analysis results
-        """
-        if not blocks:
-            return {"pattern": "empty", "confidence": 1.0}
-        
-        # Count element types - more comprehensive
-        type_counts = {}
-        for block in blocks:
-            block_type = block.get('type', 'unknown')
-            type_counts[block_type] = type_counts.get(block_type, 0) + 1
-        
-        # Analyze spatial relationships
-        input_count = type_counts.get('text_input', 0) + type_counts.get('input_field', 0) + type_counts.get('password_input', 0)
-        button_count = type_counts.get('button', 0)
-        text_count = type_counts.get('text', 0) + type_counts.get('text_block', 0)
-        card_count = type_counts.get('card', 0)
-        image_count = type_counts.get('image', 0) + type_counts.get('image_block', 0)
-        heading_count = type_counts.get('heading', 0)
-        link_count = type_counts.get('link', 0)
-        container_count = type_counts.get('container', 0)
-        
-        total_elements = len(blocks)
-        
-        # Determine primary pattern with better heuristics
-        if input_count >= 1 and button_count >= 1:
-            # Form pattern: inputs + buttons
-            return {"pattern": "form", "confidence": 0.85}
-        elif card_count >= 2 or (container_count >= 2 and total_elements > 4):
-            # Cards pattern: multiple cards or containers
-            return {"pattern": "cards", "confidence": 0.75}
-        elif image_count >= 2 and total_elements >= 4:
-            # Gallery pattern: multiple images
-            return {"pattern": "gallery", "confidence": 0.7}
-        elif heading_count >= 1 and text_count >= 2:
-            # Content pattern: headings + text
-            return {"pattern": "content", "confidence": 0.7}
-        elif button_count >= 3 or link_count >= 3:
-            # Navigation pattern: multiple buttons/links
-            return {"pattern": "navigation", "confidence": 0.6}
-        elif heading_count >= 1 and (button_count >= 1 or image_count >= 1):
-            # Hero section pattern
-            return {"pattern": "hero", "confidence": 0.65}
-        elif total_elements == 1:
-            # Single element - treat as content
-            return {"pattern": "content", "confidence": 0.8}
-        else:
-            # Generic fallback
-            return {"pattern": "content", "confidence": 0.5}
-    
-    def group_blocks_by_proximity(self, blocks: List[Dict[str, Any]], threshold: int = 50) -> List[List[Dict[str, Any]]]:
-        """
-        Group blocks that are close to each other spatially.
-        
-        Args:
-            blocks: List of UI blocks
-            threshold: Maximum distance for grouping
-            
-        Returns:
-            List of block groups
-        """
-        if not blocks:
-            return []
-        
-        # Sort blocks by vertical position first
-        sorted_blocks = sorted(blocks, key=lambda b: (b['y'], b['x']))
-        
-        groups = []
-        current_group = [sorted_blocks[0]]
-        
-        for block in sorted_blocks[1:]:
-            # Check if block is close to any block in current group
-            close_to_group = False
-            for group_block in current_group:
-                distance = self.calculate_block_distance(block, group_block)
-                if distance <= threshold:
-                    close_to_group = True
-                    break
-            
-            if close_to_group:
-                current_group.append(block)
-            else:
-                groups.append(current_group)
-                current_group = [block]
-        
-        if current_group:
-            groups.append(current_group)
-        
-        return groups
-    
-    def calculate_block_distance(self, block1: Dict[str, Any], block2: Dict[str, Any]) -> float:
-        """Calculate the minimum distance between two blocks."""
-        x1, y1, w1, h1 = block1['x'], block1['y'], block1['w'], block1['h']
-        x2, y2, w2, h2 = block2['x'], block2['y'], block2['w'], block2['h']
-        
-        # Calculate center points
-        center1_x, center1_y = x1 + w1/2, y1 + h1/2
-        center2_x, center2_y = x2 + w2/2, y2 + h2/2
-        
-        # Euclidean distance between centers
-        return ((center1_x - center2_x)**2 + (center1_y - center2_y)**2)**0.5
-    
-    def create_form_section(self, blocks: List[Dict[str, Any]], section_id: str, 
-                           style_info: Optional[Dict[str, Any]] = None) -> Section:
-        """Create a form section from a group of blocks with style."""
-        elements = []
-        primary_action = None
-        secondary_actions = []
-        
-        # Sort blocks by position (top to bottom, left to right)
-        sorted_blocks = sorted(blocks, key=lambda b: (b['y'], b['x']))
-        
-        for i, block in enumerate(sorted_blocks):
-            block_type = block.get('type', 'unknown')
-            
-            if block_type in ['input_field', 'password_input', 'text_input']:
-                # Determine input type
-                input_type = ElementType.PASSWORD_INPUT.value if block_type == 'password_input' else ElementType.TEXT_INPUT.value
-                
-                # Generate label based on position and context
-                label = self.generate_label_for_input(block, i, sorted_blocks)
-                name = self.generate_name_for_input(input_type, i)
-                placeholder = self.generate_placeholder_for_input(input_type)
-                
-                element = UIElement(
-                    type=input_type,
-                    label=label,
-                    name=name,
-                    placeholder=placeholder,
-                    required=True
-                )
-                elements.append(element)
-                
-            elif block_type == 'button':
-                button_text = self.generate_button_text(block, i, len(sorted_blocks))
-                button_element = UIElement(
-                    type=ElementType.BUTTON.value,
-                    label=button_text
-                )
-                
-                # Determine if primary or secondary action
-                if primary_action is None and i > len(sorted_blocks) // 2:
-                    primary_action = button_element
-                else:
-                    secondary_actions.append(button_element)
-                    
-            elif block_type == 'text_block' or block_type == 'text':
-                # Add as label or description
-                text_content = self.generate_text_content(block, i)
-                if text_content:
-                    element = UIElement(
-                        type=ElementType.TEXT_BLOCK.value,
-                        label=text_content
-                    )
-                    elements.append(element)
-        
-        # Ensure we have a primary action
-        if primary_action is None and elements:
-            primary_action = UIElement(
-                type=ElementType.BUTTON.value,
-                label="Submit"
-            )
-        
-        # Build section style from style_info
-        section_style = self._build_section_style(
-            blocks, style_info, section_type="form"
-        )
-        
-        return Section(
-            type=SectionType.FORM.value,
-            id=section_id,
-            title=None,  # Forms typically don't have titles
-            elements=elements,
-            primary_action=primary_action,
-            secondary_actions=secondary_actions,
-            style=section_style
-        )
-    
-    def create_cards_section(self, blocks: List[Dict[str, Any]], section_id: str,
-                            style_info: Optional[Dict[str, Any]] = None) -> Section:
-        """Create a cards section from a group of blocks with style."""
-        cards = []
-        
-        # Group blocks into individual cards based on proximity
-        card_groups = self.group_blocks_by_proximity(blocks, threshold=30)
-        
-        for i, card_blocks in enumerate(card_groups):
-            card_dict = {
-                "title": f"Card {i + 1}",
-                "body": "Auto-generated content."
-            }
-            cards.append(card_dict)
-        
-        # Build section style
-        section_style = self._build_section_style(
-            blocks, style_info, section_type="cards"
-        )
-        
-        # Detect column count from horizontal positioning
-        if len(blocks) >= 3:
-            x_positions = sorted([b['x'] for b in blocks])
-            unique_x = []
-            for x in x_positions:
-                if not unique_x or abs(x - unique_x[-1]) > 40:
-                    unique_x.append(x)
-            section_style["columns"] = min(len(unique_x), 4)
-        else:
-            section_style["columns"] = len(cards) if len(cards) <= 3 else 3
-        
-        return Section(
-            type=SectionType.CARDS.value,
-            id=section_id,
-            title=None,
-            elements=[],
-            cards=cards,
-            style=section_style
-        )
-    
-    def create_content_section(self, blocks: List[Dict[str, Any]], section_id: str,
-                              style_info: Optional[Dict[str, Any]] = None) -> Section:
-        """Create a content section from a group of blocks with style."""
-        elements = []
-        
-        sorted_blocks = sorted(blocks, key=lambda b: (b['y'], b['x']))
-        
-        for i, block in enumerate(sorted_blocks):
-            block_type = block.get('type', 'unknown')
-            
-            if block_type in ['text_block', 'text', 'heading']:
-                text_content = self.generate_text_content(block, i)
-                element = UIElement(
-                    type=ElementType.TEXT_BLOCK.value,
-                    label=text_content
-                )
-                elements.append(element)
-                
-            elif block_type in ['image_block', 'image']:
-                element = UIElement(
-                    type=ElementType.IMAGE_BLOCK.value,
-                    label="Image",
-                    value="placeholder-image.jpg"
-                )
-                elements.append(element)
-        
-        # Build section style
-        section_style = self._build_section_style(
-            blocks, style_info, section_type="content"
-        )
-        
-        return Section(
-            type=SectionType.CONTENT.value,
-            id=section_id,
-            title=None,
-            elements=elements,
-            style=section_style
-        )
-    
-    def generate_label_for_input(self, block: Dict[str, Any], index: int, all_blocks: List[Dict[str, Any]]) -> str:
-        """Generate a meaningful label for an input field."""
-        block_type = block.get('type', 'unknown')
-        
-        if block_type == 'password_input':
-            return "Password"
-        
-        # Look for common patterns based on position
-        if index == 0 or any('email' in str(b).lower() for b in all_blocks[:index+1]):
-            return "Email"
-        elif index == 1 and block_type == 'input_field':
-            return "Username"
-        else:
-            return f"Field {index + 1}"
-    
-    def generate_name_for_input(self, input_type: str, index: int) -> str:
-        """Generate a valid name attribute for an input."""
-        if input_type == ElementType.PASSWORD_INPUT.value:
-            return "password"
-        elif input_type == ElementType.EMAIL_INPUT.value:
-            return "email"
-        elif index == 0:
-            return "email"  # First input is often email
-        else:
-            return f"field_{index}"
-    
-    def generate_placeholder_for_input(self, input_type: str) -> str:
-        """Generate appropriate placeholder text."""
-        placeholders = {
-            ElementType.EMAIL_INPUT.value: "Enter your email",
-            ElementType.PASSWORD_INPUT.value: "Enter your password",
-            ElementType.TEXT_INPUT.value: "Enter text here"
-        }
-        return placeholders.get(input_type, "Enter value")
-    
-    def generate_button_text(self, block: Dict[str, Any], index: int, total_count: int) -> str:
-        """Generate appropriate button text based on context."""
-        # If it's likely the main action button
-        if index >= total_count - 2:
-            return "Submit"
-        else:
-            return "Cancel"
-    
-    def generate_text_content(self, block: Dict[str, Any], index: int) -> str:
-        """Generate text content for text blocks."""
-        area = block.get('w', 0) * block.get('h', 0)
-        
-        if area > 5000:
-            return "This is a larger text block with more content."
-        elif index == 0:
-            return "Welcome! Please fill out the form below."
-        else:
-            return f"Text content {index + 1}"
-    
-    def _build_section_style(self, blocks: List[Dict[str, Any]], 
-                            style_info: Optional[Dict[str, Any]], 
-                            section_type: str) -> Dict[str, Any]:
-        """
-        Build section-level style from style_info and block positions.
-        
-        Args:
-            blocks: Blocks in this section
-            style_info: Global style info from style_analyzer
-            section_type: "form" | "cards" | "content"
-            
-        Returns:
-            Dict with section style properties
-        """
-        section_style = {}
-        
-        # Get base spacing from style_info
-        base_spacing = 16
-        if style_info and 'page' in style_info:
-            base_spacing = style_info['page'].get('base_spacing', 16)
-        
-        # Section-specific defaults
-        if section_type == "form":
-            section_style.update({
-                "card": True,
-                "border_radius": 16,
-                "padding": base_spacing * 1.5,  # 24px if base is 16
-                "gap": base_spacing,
-                "alignment": "center"
-            })
-        elif section_type == "cards":
-            section_style.update({
-                "border_radius": 12,
-                "padding": base_spacing,
-                "gap": base_spacing,
-                "columns": 3  # Will be overridden in create_cards_section
-            })
-        else:  # content
-            section_style.update({
-                "padding": base_spacing,
-                "gap": base_spacing * 0.75,
-                "alignment": "left"
-            })
-        
-        return section_style
-
-
-def build_ils(typed_blocks: List[Dict[str, Any]], 
-              style_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+class ILSNode:
     """
-    Build an Intermediate Layout Schema from typed blocks + style info.
+    A node in the ILS tree representing a UI element or container.
     
-    This is the main function that converts classified UI blocks and extracted
-    style information into a structured representation for code generation.
+    This is the core data structure for ILS v2. Each node can have:
+    - Basic info: id, type, role
+    - Geometry: rect (x, y, w, h)
+    - Layout: how children are arranged
+    - Style: colors, spacing, typography
+    - Children: nested nodes
+    """
+    id: str
+    type: NodeType
+    role: Optional[Role] = None
+    rect: Optional[Dict[str, int]] = None  # {"x": int, "y": int, "w": int, "h": int}
+    
+    # Layout configuration for containers
+    layout: Dict[str, Any] = field(default_factory=lambda: {
+        "mode": LayoutMode.VERTICAL,
+        "columns": None,
+        "gap": None,
+        "padding": None,
+        "align": None,        # start | center | end
+        "justify": None,      # start | center | end | space-between
+        "z_index": None
+    })
+    
+    # Style configuration
+    style: Dict[str, Any] = field(default_factory=lambda: {
+        "background_color": None,
+        "text_color": None,
+        "primary_color": None,
+        "accent_color": None,
+        "border_radius": None,
+        "font_scale": None,    # title | heading | body | caption
+        "variant": None        # solid | outline | ghost
+    })
+    
+    # Text content (if applicable)
+    text: Optional[str] = None
+    
+    # Children nodes
+    children: List["ILSNode"] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-serializable dictionary."""
+        result = {
+            "id": self.id,
+            "type": self.type.value if isinstance(self.type, Enum) else self.type,
+        }
+        
+        if self.role:
+            result["role"] = self.role.value if isinstance(self.role, Enum) else self.role
+        
+        if self.rect:
+            result["rect"] = self.rect
+        
+        # Clean up layout (remove None values)
+        clean_layout = {k: v for k, v in self.layout.items() if v is not None}
+        if clean_layout:
+            # Convert enums to strings
+            if "mode" in clean_layout and isinstance(clean_layout["mode"], Enum):
+                clean_layout["mode"] = clean_layout["mode"].value
+            result["layout"] = clean_layout
+        
+        # Clean up style
+        clean_style = {k: v for k, v in self.style.items() if v is not None}
+        if clean_style:
+            result["style"] = clean_style
+        
+        if self.text:
+            result["text"] = self.text
+        
+        if self.children:
+            result["children"] = [child.to_dict() for child in self.children]
+        
+        return result
+
+
+# ============================================================================
+# SECTION DETECTION HELPERS
+# ============================================================================
+
+def detect_navbar(typed_blocks: List[Any], image_size: Tuple[int, int]) -> Optional[ILSNode]:
+    """
+    Detect navbar: horizontal section at top with full width.
     
     Args:
-        typed_blocks: List of blocks with type classification
-        style_info: Optional style analysis output from style_analyzer.analyze_style()
+        typed_blocks: List of TypedBlock objects from classifier
+        image_size: (height, width) of image
         
     Returns:
-        Dictionary representation of the ILS with structure + style
+        ILSNode for navbar or None
     """
-    logger.debug(f"Building ILS from {len(typed_blocks)} typed blocks")
+    image_h, image_w = image_size
     
-    if not typed_blocks:
-        # Return minimal empty page
-        empty_ils = ILS(
-            title="Empty Page",
-            layout_mode="single_column",
-            style=_get_default_page_style(style_info)
+    # Find blocks in top 15% of image that span most of width
+    navbar_candidates = []
+    for block in typed_blocks:
+        y_pos = block.y
+        width = block.w
+        
+        # Must be in top portion and span significant width
+        if y_pos < image_h * 0.15 and width > image_w * 0.6:
+            navbar_candidates.append(block)
+    
+    if not navbar_candidates:
+        return None
+    
+    # Sort by y position and take topmost blocks
+    navbar_candidates.sort(key=lambda b: b.y)
+    navbar_blocks = []
+    
+    if navbar_candidates:
+        first_y = navbar_candidates[0].y
+        # Take all blocks within 50px of first block
+        for block in navbar_candidates:
+            if abs(block.y - first_y) < 50:
+                navbar_blocks.append(block)
+    
+    if not navbar_blocks:
+        return None
+    
+    # Calculate bounding box
+    min_x = min(b.x for b in navbar_blocks)
+    min_y = min(b.y for b in navbar_blocks)
+    max_x = max(b.x + b.w for b in navbar_blocks)
+    max_y = max(b.y + b.h for b in navbar_blocks)
+    
+    # Create navbar node
+    navbar = ILSNode(
+        id="navbar",
+        type=NodeType.NAVBAR,
+        rect={"x": min_x, "y": min_y, "w": max_x - min_x, "h": max_y - min_y},
+        layout={
+            "mode": LayoutMode.HORIZONTAL,
+            "gap": 16,
+            "padding": 16,
+            "align": "center",
+            "justify": "space-between"
+        }
+    )
+    
+    # Add children
+    for block in navbar_blocks:
+        child = create_leaf_node(block)
+        navbar.children.append(child)
+    
+    logger.debug(f"Detected navbar with {len(navbar_blocks)} elements")
+    return navbar
+
+
+def detect_sidebar(typed_blocks: List[Any], image_size: Tuple[int, int]) -> Optional[ILSNode]:
+    """
+    Detect sidebar: narrow vertical column on left or right.
+    
+    Args:
+        typed_blocks: List of TypedBlock objects
+        image_size: (height, width) of image
+        
+    Returns:
+        ILSNode for sidebar or None
+    """
+    image_h, image_w = image_size
+    
+    # Look for tall narrow columns on edges
+    sidebar_candidates = []
+    for block in typed_blocks:
+        x_pos = block.x
+        width = block.w
+        height = block.h
+        
+        # Must be narrow (< 25% width) and tall (> 50% height)
+        if width < image_w * 0.25 and height > image_h * 0.5:
+            # On left or right edge
+            if x_pos < image_w * 0.1 or x_pos > image_w * 0.75:
+                sidebar_candidates.append(block)
+    
+    if not sidebar_candidates:
+        return None
+    
+    # Take the tallest candidate
+    sidebar_block = max(sidebar_candidates, key=lambda b: b.h)
+    
+    sidebar = ILSNode(
+        id="sidebar",
+        type=NodeType.SIDEBAR,
+        rect={"x": sidebar_block.x, "y": sidebar_block.y, "w": sidebar_block.w, "h": sidebar_block.h},
+        layout={
+            "mode": LayoutMode.VERTICAL,
+            "gap": 12,
+            "padding": 16
+        }
+    )
+    
+    logger.debug(f"Detected sidebar at x={sidebar_block.x}")
+    return sidebar
+
+
+def detect_hero_section(typed_blocks: List[Any], image_size: Tuple[int, int]) -> Optional[ILSNode]:
+    """
+    Detect hero section: large image/heading near top-center.
+    
+    Args:
+        typed_blocks: List of TypedBlock objects
+        image_size: (height, width) of image
+        
+    Returns:
+        ILSNode for hero or None
+    """
+    image_h, image_w = image_size
+    
+    # Look for large blocks in upper-middle portion
+    hero_candidates = []
+    for block in typed_blocks:
+        y_pos = block.y
+        x_pos = block.x
+        width = block.w
+        height = block.h
+        area = width * height
+        
+        # In upper half, reasonably centered, large area
+        if (0.1 * image_h < y_pos < 0.5 * image_h and
+            0.2 * image_w < x_pos < 0.8 * image_w and
+            area > image_w * image_h * 0.1):
+            
+            # Prefer headings and image blocks
+            if block.type in ["heading", "image_block"]:
+                hero_candidates.append(block)
+    
+    if not hero_candidates:
+        return None
+    
+    # Take largest candidate
+    hero_block = max(hero_candidates, key=lambda b: b.w * b.h)
+    
+    # Look for nearby blocks to include
+    hero_blocks = [hero_block]
+    hero_y_min = hero_block.y
+    hero_y_max = hero_block.y + hero_block.h
+    
+    for block in typed_blocks:
+        if block.id == hero_block.id:
+            continue
+        # Within vertical range
+        if (hero_y_min - 100 < block.y < hero_y_max + 100 and
+            0.2 * image_w < block.x < 0.8 * image_w):
+            hero_blocks.append(block)
+    
+    # Calculate bounding box
+    min_x = min(b.x for b in hero_blocks)
+    min_y = min(b.y for b in hero_blocks)
+    max_x = max(b.x + b.w for b in hero_blocks)
+    max_y = max(b.y + b.h for b in hero_blocks)
+    
+    hero = ILSNode(
+        id="hero",
+        type=NodeType.HERO,
+        role=Role.HIGHLIGHT,
+        rect={"x": min_x, "y": min_y, "w": max_x - min_x, "h": max_y - min_y},
+        layout={
+            "mode": LayoutMode.VERTICAL,
+            "gap": 24,
+            "padding": 48,
+            "align": "center"
+        }
+    )
+    
+    # Add children
+    for block in hero_blocks:
+        child = create_leaf_node(block)
+        hero.children.append(child)
+    
+    logger.debug(f"Detected hero section with {len(hero_blocks)} elements")
+    return hero
+
+
+def detect_form_sections(typed_blocks: List[Any], image_size: Tuple[int, int]) -> List[ILSNode]:
+    """
+    Detect form sections: vertical groups of inputs + button.
+    
+    Args:
+        typed_blocks: List of TypedBlock objects
+        image_size: (height, width) of image
+        
+    Returns:
+        List of ILSNode for forms
+    """
+    from .detection import cluster_rows
+    
+    # Find input fields and password inputs
+    input_blocks = [b for b in typed_blocks if b.type in ["input_field", "password_input"]]
+    
+    if len(input_blocks) < 2:
+        return []
+    
+    # Convert to dict format for clustering
+    input_dicts = [{"x": b.x, "y": b.y, "w": b.w, "h": b.h, "block": b} for b in input_blocks]
+    rows = cluster_rows(input_dicts, row_gap_threshold=30)
+    
+    # Look for vertical stacks of inputs
+    forms = []
+    for i, row_group in enumerate(rows):
+        if len(row_group) >= 2:  # At least 2 inputs
+            blocks_in_form = [item["block"] for item in row_group]
+            
+            # Look for nearby button
+            form_y_min = min(b.y for b in blocks_in_form)
+            form_y_max = max(b.y + b.h for b in blocks_in_form)
+            form_x_center = np.mean([b.x + b.w / 2 for b in blocks_in_form])
+            
+            button_block = None
+            for block in typed_blocks:
+                if block.type == "button":
+                    # Below the inputs, reasonably centered
+                    if (form_y_max < block.y < form_y_max + 150 and
+                        abs(block.x + block.w / 2 - form_x_center) < 200):
+                        button_block = block
+                        break
+            
+            if button_block:
+                blocks_in_form.append(button_block)
+            
+            # Calculate bounding box
+            min_x = min(b.x for b in blocks_in_form)
+            min_y = min(b.y for b in blocks_in_form)
+            max_x = max(b.x + b.w for b in blocks_in_form)
+            max_y = max(b.y + b.h for b in blocks_in_form)
+            
+            form = ILSNode(
+                id=f"form_{i+1}",
+                type=NodeType.FORM,
+                role=Role.PRIMARY,
+                rect={"x": min_x, "y": min_y, "w": max_x - min_x, "h": max_y - min_y},
+                layout={
+                    "mode": LayoutMode.VERTICAL,
+                    "gap": 16,
+                    "padding": 24
+                }
+            )
+            
+            # Add children
+            for block in blocks_in_form:
+                child = create_leaf_node(block)
+                if block.type == "button":
+                    child.role = Role.PRIMARY
+                form.children.append(child)
+            
+            forms.append(form)
+            logger.debug(f"Detected form with {len(blocks_in_form)} elements")
+    
+    return forms
+
+
+def detect_card_sections(typed_blocks: List[Any], image_size: Tuple[int, int]) -> List[ILSNode]:
+    """
+    Detect card grids: repeated card-like shapes.
+    
+    Args:
+        typed_blocks: List of TypedBlock objects
+        image_size: (height, width) of image
+        
+    Returns:
+        List of ILSNode for card sections
+    """
+    # Find card-type blocks
+    card_blocks = [b for b in typed_blocks if b.type == "card"]
+    
+    if len(card_blocks) < 2:
+        return []
+    
+    # Group cards that are similar in size and aligned
+    card_groups = []
+    used = set()
+    
+    for i, card1 in enumerate(card_blocks):
+        if i in used:
+            continue
+        
+        group = [card1]
+        used.add(i)
+        
+        for j, card2 in enumerate(card_blocks[i+1:], i+1):
+            if j in used:
+                continue
+            
+            # Similar size
+            size_ratio = min(card1.w, card2.w) / max(card1.w, card2.w)
+            height_ratio = min(card1.h, card2.h) / max(card1.h, card2.h)
+            
+            # Aligned vertically or horizontally
+            h_aligned = abs(card1.y - card2.y) < 50
+            v_aligned = abs(card1.x - card2.x) < 50
+            
+            if size_ratio > 0.7 and height_ratio > 0.7 and (h_aligned or v_aligned):
+                group.append(card2)
+                used.add(j)
+        
+        if len(group) >= 2:
+            card_groups.append(group)
+    
+    # Create card section nodes
+    sections = []
+    for i, group in enumerate(card_groups):
+        min_x = min(b.x for b in group)
+        min_y = min(b.y for b in group)
+        max_x = max(b.x + b.w for b in group)
+        max_y = max(b.y + b.h for b in group)
+        
+        # Determine grid columns (estimate from layout)
+        avg_card_w = np.mean([b.w for b in group])
+        total_w = max_x - min_x
+        columns = max(1, int(total_w / (avg_card_w * 1.2)))
+        
+        cards_section = ILSNode(
+            id=f"cards_{i+1}",
+            type=NodeType.CARDS,
+            rect={"x": min_x, "y": min_y, "w": max_x - min_x, "h": max_y - min_y},
+            layout={
+                "mode": LayoutMode.GRID,
+                "columns": columns,
+                "gap": 24,
+                "padding": 24
+            }
         )
-        return empty_ils.to_dict()
+        
+        # Add card children
+        for block in group:
+            card_node = create_leaf_node(block)
+            cards_section.children.append(card_node)
+        
+        sections.append(cards_section)
+        logger.debug(f"Detected card section with {len(group)} cards, {columns} columns")
     
-    builder = ILSBuilder()
-    builder.blocks = typed_blocks
+    return sections
+
+
+def detect_footer(typed_blocks: List[Any], image_size: Tuple[int, int]) -> Optional[ILSNode]:
+    """
+    Detect footer: horizontal section at bottom.
     
-    # Analyze layout patterns
-    layout_analysis = builder.analyze_layout_patterns(typed_blocks)
-    logger.debug(f"Layout pattern: {layout_analysis}")
+    Args:
+        typed_blocks: List of TypedBlock objects
+        image_size: (height, width) of image
+        
+    Returns:
+        ILSNode for footer or None
+    """
+    image_h, image_w = image_size
     
-    # Group blocks by proximity
-    block_groups = builder.group_blocks_by_proximity(typed_blocks)
-    logger.debug(f"Grouped into {len(block_groups)} sections")
+    # Find blocks in bottom 15% of image
+    footer_candidates = []
+    for block in typed_blocks:
+        y_pos = block.y
+        
+        # Must be in bottom portion
+        if y_pos > image_h * 0.85:
+            footer_candidates.append(block)
+    
+    if not footer_candidates:
+        return None
+    
+    # Calculate bounding box
+    min_x = min(b.x for b in footer_candidates)
+    min_y = min(b.y for b in footer_candidates)
+    max_x = max(b.x + b.w for b in footer_candidates)
+    max_y = max(b.y + b.h for b in footer_candidates)
+    
+    footer = ILSNode(
+        id="footer",
+        type=NodeType.FOOTER,
+        rect={"x": min_x, "y": min_y, "w": max_x - min_x, "h": max_y - min_y},
+        layout={
+            "mode": LayoutMode.HORIZONTAL,
+            "gap": 16,
+            "padding": 24,
+            "justify": "center"
+        }
+    )
+    
+    # Add children
+    for block in footer_candidates:
+        child = create_leaf_node(block)
+        footer.children.append(child)
+    
+    logger.debug(f"Detected footer with {len(footer_candidates)} elements")
+    return footer
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def create_leaf_node(block: Any) -> ILSNode:
+    """
+    Create a leaf ILS node from a TypedBlock.
+    
+    Args:
+        block: TypedBlock object from classifier
+        
+    Returns:
+        ILSNode for the element
+    """
+    # Map type string to NodeType enum
+    try:
+        node_type = NodeType(block.type)
+    except ValueError:
+        node_type = NodeType.UNKNOWN
+    
+    return ILSNode(
+        id=block.id,
+        type=node_type,
+        rect={"x": block.x, "y": block.y, "w": block.w, "h": block.h}
+    )
+
+
+def assign_used_blocks(sections: List[ILSNode]) -> set:
+    """
+    Get set of block IDs that are already used in sections.
+    
+    Args:
+        sections: List of section nodes
+        
+    Returns:
+        Set of block IDs
+    """
+    used = set()
+    for section in sections:
+        for child in section.children:
+            used.add(child.id)
+    return used
+
+
+def create_generic_section(remaining_blocks: List[Any], section_id: str) -> ILSNode:
+    """
+    Create a generic section for remaining blocks.
+    
+    Args:
+        remaining_blocks: List of TypedBlock objects
+        section_id: ID for the section
+        
+    Returns:
+        ILSNode for generic section
+    """
+    if not remaining_blocks:
+        return None
+    
+    min_x = min(b.x for b in remaining_blocks)
+    min_y = min(b.y for b in remaining_blocks)
+    max_x = max(b.x + b.w for b in remaining_blocks)
+    max_y = max(b.y + b.h for b in remaining_blocks)
+    
+    section = ILSNode(
+        id=section_id,
+        type=NodeType.SECTION,
+        rect={"x": min_x, "y": min_y, "w": max_x - min_x, "h": max_y - min_y},
+        layout={
+            "mode": LayoutMode.VERTICAL,
+            "gap": 16,
+            "padding": 16
+        }
+    )
+    
+    # Add children
+    for block in remaining_blocks:
+        child = create_leaf_node(block)
+        section.children.append(child)
+    
+    return section
+
+
+# ============================================================================
+# MAIN ILS BUILDER
+# ============================================================================
+
+def build_ils(typed_blocks: List[Any], style_info: Optional[Dict] = None) -> Dict[str, Any]:
+    """
+    Build ILS v2 tree from classified blocks and style information.
+    
+    This is the main entry point for ILS construction. It:
+    1. Detects semantic sections (navbar, hero, forms, cards, footer)
+    2. Groups remaining blocks into generic sections
+    3. Builds hierarchical tree structure
+    4. Applies style information from style_analyzer
+    5. Returns JSON-serializable dictionary
+    
+    Args:
+        typed_blocks: List of TypedBlock objects from classifier
+        style_info: Optional style analysis from style_analyzer
+        
+    Returns:
+        Dictionary representation of ILS tree
+        
+    Examples:
+        >>> typed_blocks = classify_blocks(model, image, blocks)
+        >>> style_info = analyze_style(image, typed_blocks)
+        >>> ils = build_ils(typed_blocks, style_info)
+        >>> print(ils["type"])  # "page"
+        >>> print(len(ils["children"]))  # Number of sections
+    """
+    if not typed_blocks:
+        logger.warning("No blocks to build ILS from")
+        return create_empty_page()
+    
+    # Get image dimensions from blocks
+    image_h = max(b.y + b.h for b in typed_blocks)
+    image_w = max(b.x + b.w for b in typed_blocks)
+    image_size = (image_h, image_w)
+    
+    logger.info(f"Building ILS from {len(typed_blocks)} blocks")
+    
+    # ========================================================================
+    # SECTION DETECTION
+    # ========================================================================
     
     sections = []
     
-    for i, group in enumerate(block_groups):
-        section_id = f"auto_{layout_analysis['pattern']}_{i + 1}"
-        group_pattern = builder.analyze_layout_patterns(group)
+    # 1. Navbar
+    navbar = detect_navbar(typed_blocks, image_size)
+    if navbar:
+        sections.append(navbar)
+    
+    # 2. Sidebar
+    sidebar = detect_sidebar(typed_blocks, image_size)
+    if sidebar:
+        sections.append(sidebar)
+    
+    # 3. Hero
+    hero = detect_hero_section(typed_blocks, image_size)
+    if hero:
+        sections.append(hero)
+    
+    # 4. Forms
+    forms = detect_form_sections(typed_blocks, image_size)
+    sections.extend(forms)
+    
+    # 5. Cards
+    card_sections = detect_card_sections(typed_blocks, image_size)
+    sections.extend(card_sections)
+    
+    # 6. Footer
+    footer = detect_footer(typed_blocks, image_size)
+    if footer:
+        sections.append(footer)
+    
+    # ========================================================================
+    # HANDLE REMAINING BLOCKS
+    # ========================================================================
+    
+    used_ids = assign_used_blocks(sections)
+    remaining_blocks = [b for b in typed_blocks if b.id not in used_ids]
+    
+    if remaining_blocks:
+        logger.debug(f"{len(remaining_blocks)} blocks not assigned to sections")
+        # Group remaining blocks by vertical proximity
+        from .detection import cluster_rows
         
-        if group_pattern["pattern"] == "form":
-            section = builder.create_form_section(group, section_id, style_info)
-        elif group_pattern["pattern"] == "cards":
-            section = builder.create_cards_section(group, section_id, style_info)
-        else:
-            section = builder.create_content_section(group, section_id, style_info)
+        remaining_dicts = [{"x": b.x, "y": b.y, "w": b.w, "h": b.h, "block": b} for b in remaining_blocks]
+        rows = cluster_rows(remaining_dicts, row_gap_threshold=50)
         
-        sections.append(section)
+        for i, row in enumerate(rows):
+            row_blocks = [item["block"] for item in row]
+            section = create_generic_section(row_blocks, f"section_{i+1}")
+            if section:
+                sections.append(section)
     
-    # Ensure we have at least one section
-    if not sections:
-        # Create a generic section with default style
-        base_spacing = 16
-        if style_info and 'page' in style_info:
-            base_spacing = style_info['page'].get('base_spacing', 16)
-        
-        section = Section(
-            type=SectionType.CONTENT.value,
-            id="auto_content_1",
-            title=None,
-            elements=[
-                UIElement(
-                    type=ElementType.TEXT_BLOCK.value,
-                    label="Generated content from UI analysis"
-                )
-            ],
-            style={
-                "padding": base_spacing,
-                "gap": base_spacing * 0.75
-            }
-        )
-        sections.append(section)
+    # Sort sections by vertical position
+    sections.sort(key=lambda s: s.rect["y"] if s.rect else 0)
     
-    # Determine layout mode from style_info
-    layout_mode = "single_column"
-    if style_info and 'page' in style_info:
-        layout_mode = style_info['page'].get('layout_mode', 'single_column')
+    # ========================================================================
+    # BUILD PAGE NODE
+    # ========================================================================
     
-    # Build page-level style
-    page_style = _get_page_style(style_info)
-    
-    # Build final ILS
-    ils = ILS(
-        title="Generated UI",
-        layout_mode=layout_mode,
-        style=page_style,
-        sections=sections
+    page = ILSNode(
+        id="page_root",
+        type=NodeType.PAGE,
+        layout={
+            "mode": LayoutMode.VERTICAL,
+            "gap": 0,
+            "padding": 0
+        },
+        children=sections
     )
     
-    ils_dict = ils.to_dict()
-    logger.info(f"Built ILS with {len(sections)} sections, layout_mode={layout_mode}")
+    # ========================================================================
+    # APPLY STYLE INFORMATION
+    # ========================================================================
     
-    return ils_dict
+    if style_info:
+        apply_style_to_tree(page, style_info)
+    
+    logger.info(f"Built ILS tree with {len(sections)} sections")
+    
+    return page.to_dict()
 
 
-def _get_default_page_style(style_info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Get default page style when no blocks are detected."""
-    if style_info and 'page' in style_info:
-        return {
-            "background_color": style_info['page'].get('background_color', '#f5f6fa'),
-            "primary_color": style_info['page'].get('primary_color', '#2563eb'),
-            "accent_color": style_info['page'].get('accent_color', '#f59e0b'),
-            "text_color": style_info['page'].get('text_color', '#111827')
-        }
+def apply_style_to_tree(page: ILSNode, style_info: Dict) -> None:
+    """
+    Apply style information to ILS tree.
     
-    return {
-        "background_color": "#f5f6fa",
-        "primary_color": "#2563eb",
-        "accent_color": "#f59e0b",
-        "text_color": "#111827"
-    }
+    Args:
+        page: Root page node
+        style_info: Style analysis from style_analyzer
+    """
+    # Apply page-level style
+    if "page" in style_info:
+        page_style = style_info["page"]
+        page.style.update({
+            "background_color": page_style.get("background_color"),
+            "primary_color": page_style.get("primary_color"),
+            "accent_color": page_style.get("accent_color"),
+            "text_color": page_style.get("text_color")
+        })
+        
+        # Update layout with base spacing
+        if "base_spacing" in page_style:
+            page.layout["gap"] = page_style["base_spacing"]
+    
+    # Apply block-level styles
+    if "blocks" in style_info:
+        block_styles = {b["id"]: b for b in style_info["blocks"]}
+        
+        def apply_to_node(node: ILSNode):
+            if node.id in block_styles:
+                block_style = block_styles[node.id]["style"]
+                node.style.update({
+                    "background_color": block_style.get("background_color"),
+                    "text_color": block_style.get("text_color"),
+                    "border_radius": block_style.get("border_radius"),
+                    "font_scale": block_style.get("font_scale"),
+                    "variant": block_style.get("variant")
+                })
+            
+            for child in node.children:
+                apply_to_node(child)
+        
+        for section in page.children:
+            apply_to_node(section)
 
 
-def _get_page_style(style_info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Extract page-level style from style_info."""
-    if not style_info or 'page' not in style_info:
-        return _get_default_page_style(None)
-    
-    page_info = style_info['page']
-    
-    return {
-        "background_color": page_info.get('background_color', '#f5f6fa'),
-        "primary_color": page_info.get('primary_color', '#2563eb'),
-        "accent_color": page_info.get('accent_color', '#f59e0b'),
-        "text_color": page_info.get('text_color', '#111827'),
-        "base_spacing": page_info.get('base_spacing', 16)
-    }
+def create_empty_page() -> Dict[str, Any]:
+    """Create an empty page structure."""
+    page = ILSNode(
+        id="page_root",
+        type=NodeType.PAGE,
+        layout={"mode": LayoutMode.VERTICAL}
+    )
+    return page.to_dict()
 

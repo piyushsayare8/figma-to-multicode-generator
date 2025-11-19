@@ -1,331 +1,413 @@
 """
-CNN-based UI element classifier with production-ready interface.
+Unified UI element classifier with CNN model support and fallback.
 
-This module provides a pluggable interface for loading and using CNN models
-to classify detected UI blocks. The interface is designed to be easily
-replaceable with your own trained models.
+This module provides a clean API for UI element classification:
+1. Loads trained CNN model (ui_classification_model.h5) if available
+2. Falls back to geometric heuristics if model not found
+3. Provides clear logging and diagnostics
+
+Author: Figma to Multicode Generator Team
 """
 
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Optional, Any, Tuple
+from dataclasses import dataclass
 import numpy as np
-import os
+import cv2
 from pathlib import Path
-
-from config import Config, UI_ELEMENT_TYPES, FALLBACK_ELEMENT_TYPE
 
 logger = logging.getLogger(__name__)
 
-# Optional imports - will gracefully degrade if not available
-try:
-    import torch
-    import torch.nn as nn
-    import torchvision.transforms as transforms
-    TORCH_AVAILABLE = True
-except ImportError:
-    logger.warning("PyTorch not available - using stub classifier")
-    TORCH_AVAILABLE = False
-
+# Try to import TensorFlow
 try:
     import tensorflow as tf
+    from tensorflow.keras.models import load_model as keras_load_model
     TF_AVAILABLE = True
 except ImportError:
-    logger.warning("TensorFlow not available")
     TF_AVAILABLE = False
+    tf = None
 
-class StubClassifier:
-    """
-    Stub classifier for development and testing.
-    
-    This classifier assigns types based on simple heuristics when no
-    trained model is available.
-    """
-    
-    def predict(self, block_images: List[np.ndarray]) -> List[str]:
-        """
-        Predict UI element types based on simple heuristics.
-        
-        Args:
-            block_images: List of cropped block images
-            
-        Returns:
-            List of predicted types
-        """
-        predictions = []
-        
-        for img in block_images:
-            if img.size == 0:
-                predictions.append(FALLBACK_ELEMENT_TYPE)
-                continue
-                
-            h, w = img.shape[:2]
-            aspect_ratio = w / h if h > 0 else 1.0
-            area = h * w
-            
-            # Simple heuristic classification
-            if aspect_ratio > 3.0 and h < 50:
-                # Wide and short - likely input field
-                predictions.append("input_field")
-            elif aspect_ratio < 0.7 and area < 5000:
-                # Tall and narrow - likely button
-                predictions.append("button")
-            elif aspect_ratio > 2.0 and area > 10000:
-                # Wide and large - likely header or card
-                predictions.append("card")
-            elif h < 30:
-                # Short - likely text
-                predictions.append("text_block")
-            elif area > 20000:
-                # Large - likely image
-                predictions.append("image_block")
-            else:
-                predictions.append(FALLBACK_ELEMENT_TYPE)
-        
-        return predictions
 
-class PyTorchClassifier:
-    """
-    PyTorch-based CNN classifier interface.
-    
-    TODO: Replace this with your actual PyTorch model implementation.
-    """
-    
-    def __init__(self, model_path: Path):
-        """Initialize the PyTorch classifier."""
-        self.model_path = model_path
-        self.model = None
-        self.transform = None
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if TORCH_AVAILABLE else None
-        
-        if TORCH_AVAILABLE:
-            # Default transforms - adjust based on your model requirements
-            self.transform = transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.Resize((64, 64)),  # Adjust size as needed
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
-    
-    def load(self) -> bool:
-        """
-        Load the PyTorch model.
-        
-        Returns:
-            True if model loaded successfully, False otherwise
-        """
-        if not TORCH_AVAILABLE:
-            return False
-            
-        try:
-            if not self.model_path.exists():
-                logger.error(f"Model file not found: {self.model_path}")
-                return False
-            
-            # TODO: Replace with your actual model loading code
-            # Example:
-            # self.model = YourModelClass(num_classes=len(UI_ELEMENT_TYPES))
-            # checkpoint = torch.load(self.model_path, map_location=self.device)
-            # self.model.load_state_dict(checkpoint['model_state_dict'])
-            # self.model.eval()
-            # self.model.to(self.device)
-            
-            logger.warning("PyTorch model loading not implemented - using stub")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Failed to load PyTorch model: {e}")
-            return False
-    
-    def predict(self, block_images: List[np.ndarray]) -> List[str]:
-        """
-        Predict UI element types using PyTorch model.
-        
-        Args:
-            block_images: List of cropped block images (BGR format)
-            
-        Returns:
-            List of predicted types
-        """
-        if self.model is None or not TORCH_AVAILABLE:
-            logger.warning("Model not loaded, falling back to stub")
-            return StubClassifier().predict(block_images)
-        
-        try:
-            predictions = []
-            
-            with torch.no_grad():
-                for img_bgr in block_images:
-                    if img_bgr.size == 0:
-                        predictions.append(FALLBACK_ELEMENT_TYPE)
-                        continue
-                    
-                    # Convert BGR to RGB
-                    img_rgb = img_bgr[:, :, ::-1]
-                    
-                    # Apply transforms
-                    img_tensor = self.transform(img_rgb).unsqueeze(0).to(self.device)
-                    
-                    # Get prediction
-                    outputs = self.model(img_tensor)
-                    _, predicted_idx = torch.max(outputs, 1)
-                    
-                    # Map index to class name
-                    if predicted_idx.item() < len(UI_ELEMENT_TYPES):
-                        predicted_type = UI_ELEMENT_TYPES[predicted_idx.item()]
-                    else:
-                        predicted_type = FALLBACK_ELEMENT_TYPE
-                    
-                    predictions.append(predicted_type)
-            
-            return predictions
-            
-        except Exception as e:
-            logger.error(f"Prediction failed: {e}")
-            return [FALLBACK_ELEMENT_TYPE] * len(block_images)
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
 
-def load_model() -> Optional[Any]:
-    """
-    Load the CNN classifier model.
-    
-    This function attempts to load a model in the following priority:
-    1. PyTorch model (if available)
-    2. TensorFlow model (if available)  
-    3. Fallback to stub classifier
-    
-    Returns:
-        Loaded model instance or None if no model could be loaded
-    """
-    if not Config.MODEL_PATH:
-        logger.warning("No model path configured, using stub classifier")
-        return StubClassifier()
-    
-    model_path = Path(Config.MODEL_PATH)
-    
-    # Try PyTorch first
-    if TORCH_AVAILABLE and model_path.suffix in ['.pth', '.pt']:
-        logger.info("Attempting to load PyTorch model...")
-        classifier = PyTorchClassifier(model_path)
-        if classifier.load():
-            logger.info("PyTorch model loaded successfully")
-            return classifier
-    
-    # Fallback to stub
-    logger.info("Using stub classifier for development")
-    return StubClassifier()
+# TODO: Update these to match YOUR trained model's specifications
+# Model input size (width, height) - default is 224x224 for most CNNs
+MODEL_INPUT_SIZE = (224, 224)
 
-def extract_block_images(image_bgr: np.ndarray, blocks: List[Dict[str, int]]) -> List[np.ndarray]:
+# Class names mapping (index → class name)
+# TODO: Update this list to match your model's training labels in exact order
+CLASS_NAMES = [
+    'background',       # Index 0
+    'button',          # Index 1
+    'card',            # Index 2
+    'heading',         # Index 3
+    'image_block',     # Index 4
+    'input_field',     # Index 5
+    'link',            # Index 6
+    'password_input',  # Index 7
+    'text_block'       # Index 8
+]
+
+# Confidence threshold for CNN predictions
+CONFIDENCE_THRESHOLD = 0.3
+
+# Fallback type for ambiguous predictions
+FALLBACK_TYPE = "unknown"
+
+
+# ============================================================================
+# DATA STRUCTURES
+# ============================================================================
+
+@dataclass
+class Block:
+    """Raw detected block (from detection.py)."""
+    id: str
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+@dataclass
+class TypedBlock:
+    """Block with classification result."""
+    id: str
+    x: int
+    y: int
+    w: int
+    h: int
+    type: str           # Classified element type
+    confidence: float   # Confidence score (0.0 to 1.0)
+    source: str         # "cnn" or "fallback"
+
+
+# ============================================================================
+# MODEL LOADING
+# ============================================================================
+
+def load_model(config: Optional[Dict] = None) -> Optional[Any]:
     """
-    Extract cropped images for each detected block.
+    Load the trained CNN model for UI classification.
     
     Args:
-        image_bgr: Original image in BGR format
-        blocks: List of block coordinates
+        config: Optional configuration dict with 'model_path' key
         
     Returns:
-        List of cropped block images
+        Loaded Keras model or None if not available
+        
+    Examples:
+        >>> model = load_model()
+        >>> if model:
+        >>>     print("CNN model loaded")
+        >>> else:
+        >>>     print("Using fallback classifier")
     """
-    block_images = []
+    if not TF_AVAILABLE:
+        logger.warning("TensorFlow not available - install with: pip install tensorflow>=2.13.0")
+        logger.info("UI classifier model: FALLBACK mode (geometric heuristics)")
+        return None
     
-    for block in blocks:
-        x, y, w, h = block['x'], block['y'], block['w'], block['h']
-        
-        # Ensure coordinates are within image bounds
-        img_h, img_w = image_bgr.shape[:2]
-        x = max(0, min(x, img_w - 1))
-        y = max(0, min(y, img_h - 1))
-        w = max(1, min(w, img_w - x))
-        h = max(1, min(h, img_h - y))
-        
-        # Extract the block
-        block_img = image_bgr[y:y+h, x:x+w]
-        
-        # Handle edge case where block is empty
-        if block_img.size == 0:
-            # Create a small placeholder image
-            block_img = np.zeros((10, 10, 3), dtype=np.uint8)
-        
-        block_images.append(block_img)
+    # Determine model path
+    model_path = None
+    if config and 'model_path' in config:
+        model_path = Path(config['model_path'])
+    else:
+        # Default: look in backend/models/ui_classification_model.h5
+        backend_dir = Path(__file__).parent.parent
+        model_path = backend_dir / "models" / "ui_classification_model.h5"
     
-    return block_images
+    # Try to load the model
+    if not model_path.exists():
+        logger.warning(f"Model file not found at: {model_path}")
+        logger.info("UI classifier model: FALLBACK mode (geometric heuristics)")
+        logger.info("To use CNN classifier, place your trained model at: backend/models/ui_classification_model.h5")
+        return None
+    
+    try:
+        logger.info(f"Loading trained CNN model from: {model_path}")
+        model = keras_load_model(str(model_path), compile=False)
+        
+        # Verify model input shape
+        expected_shape = (None, MODEL_INPUT_SIZE[0], MODEL_INPUT_SIZE[1], 3)
+        actual_shape = model.input_shape
+        
+        if actual_shape != expected_shape:
+            logger.warning(f"Model input shape mismatch: expected {expected_shape}, got {actual_shape}")
+            logger.warning("Update MODEL_INPUT_SIZE in classifier.py to match your model")
+        
+        # Verify output shape
+        num_classes = model.output_shape[-1]
+        if num_classes != len(CLASS_NAMES):
+            logger.warning(f"Model output classes ({num_classes}) != CLASS_NAMES length ({len(CLASS_NAMES)})")
+            logger.warning("Update CLASS_NAMES in classifier.py to match your model's training labels")
+        
+        logger.info(f"✓ UI classifier model: LOADED successfully")
+        logger.info(f"  Input shape: {actual_shape}")
+        logger.info(f"  Output classes: {num_classes}")
+        logger.info(f"  Class mapping: {CLASS_NAMES}")
+        
+        return model
+        
+    except Exception as e:
+        logger.error(f"Failed to load model from {model_path}: {e}")
+        logger.info("UI classifier model: FALLBACK mode (geometric heuristics)")
+        return None
 
-def classify_blocks(model: Optional[Any], image_bgr: np.ndarray, blocks: List[Dict[str, int]]) -> List[Dict[str, Any]]:
+
+# ============================================================================
+# PREPROCESSING
+# ============================================================================
+
+def preprocess_crop_for_cnn(crop_bgr: np.ndarray) -> np.ndarray:
     """
-    Classify detected blocks using the loaded CNN model.
-    
-    This is the main interface function that your app.py will call.
+    Preprocess a cropped block image for CNN inference.
     
     Args:
-        model: Loaded classifier model (from load_model())
-        image_bgr: Original image in BGR format
-        blocks: List of geometric blocks with x, y, w, h keys
+        crop_bgr: Cropped block image in BGR format (any size)
         
     Returns:
-        List of typed blocks with added 'type' key
+        Preprocessed image ready for model.predict()
+        Shape: (1, height, width, 3) normalized to [0, 1]
+    """
+    # Resize to model input size
+    resized = cv2.resize(crop_bgr, MODEL_INPUT_SIZE, interpolation=cv2.INTER_AREA)
+    
+    # Convert BGR to RGB
+    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    
+    # Normalize to [0, 1] range
+    normalized = rgb.astype(np.float32) / 255.0
+    
+    # Add batch dimension
+    batched = np.expand_dims(normalized, axis=0)
+    
+    return batched
+
+
+def preprocess_batch_for_cnn(crops_bgr: List[np.ndarray]) -> np.ndarray:
+    """
+    Preprocess multiple crops in batch for efficient inference.
+    
+    Args:
+        crops_bgr: List of cropped images in BGR format
+        
+    Returns:
+        Batched array ready for model.predict()
+        Shape: (N, height, width, 3) normalized to [0, 1]
+    """
+    if not crops_bgr:
+        return np.array([])
+    
+    preprocessed = [preprocess_crop_for_cnn(crop)[0] for crop in crops_bgr]
+    return np.array(preprocessed)
+
+
+# ============================================================================
+# FALLBACK GEOMETRIC CLASSIFIER
+# ============================================================================
+
+def classify_by_geometry(block: Block, image_shape: Tuple[int, int]) -> Tuple[str, float]:
+    """
+    Fallback classifier using geometric heuristics.
+    
+    Args:
+        block: Block to classify
+        image_shape: (height, width) of original image
+        
+    Returns:
+        Tuple of (type, confidence_score)
+    """
+    w, h = block.w, block.h
+    aspect = w / h if h > 0 else 1.0
+    area = w * h
+    image_h, image_w = image_shape
+    
+    # Relative position
+    center_y = block.y + h / 2
+    relative_y = center_y / image_h if image_h > 0 else 0.5
+    
+    # Button detection: moderate size, wide aspect ratio
+    if 50 < w < 300 and 20 < h < 80 and 1.5 < aspect < 8:
+        return "button", 0.6
+    
+    # Input field: similar to button but slightly different dimensions
+    if 100 < w < 600 and 20 < h < 60 and 2 < aspect < 15:
+        return "input_field", 0.6
+    
+    # Heading: near top, wide, moderate height
+    if relative_y < 0.3 and w > 100 and 30 < h < 100 and aspect > 2:
+        return "heading", 0.5
+    
+    # Card: larger rectangular area, squarish to vertical
+    if area > 10000 and 0.5 < aspect < 3:
+        return "card", 0.5
+    
+    # Image block: large, squarish
+    if area > 15000 and 0.7 < aspect < 1.5:
+        return "image_block", 0.5
+    
+    # Text block: moderate size, wide
+    if 100 < w < 800 and 15 < h < 200 and aspect > 2:
+        return "text_block", 0.4
+    
+    # Link: small, wide
+    if w < 200 and h < 40 and aspect > 1.5:
+        return "link", 0.4
+    
+    # Default: unknown
+    return "unknown", 0.3
+
+
+# ============================================================================
+# MAIN CLASSIFICATION FUNCTION
+# ============================================================================
+
+def classify_blocks(
+    model: Optional[Any],
+    image_bgr: np.ndarray,
+    blocks: List[Block]
+) -> List[TypedBlock]:
+    """
+    Classify a list of detected blocks using CNN or fallback.
+    
+    Args:
+        model: Loaded Keras model or None for fallback
+        image_bgr: Original image in BGR format
+        blocks: List of detected blocks from detection.py
+        
+    Returns:
+        List of TypedBlock with classification results
+        
+    Examples:
+        >>> model = load_model()
+        >>> typed_blocks = classify_blocks(model, image, blocks)
+        >>> for block in typed_blocks:
+        >>>     print(f"{block.type} (confidence: {block.confidence:.2f})")
     """
     if not blocks:
         logger.debug("No blocks to classify")
         return []
     
-    try:
-        # Extract block images
-        block_images = extract_block_images(image_bgr, blocks)
-        logger.debug(f"Extracted {len(block_images)} block images")
+    typed_blocks = []
+    image_shape = image_bgr.shape[:2]
+    
+    # ========================================================================
+    # CNN CLASSIFICATION PATH
+    # ========================================================================
+    if model is not None:
+        logger.debug(f"Classifying {len(blocks)} blocks using CNN model")
         
-        # Classify using the model
-        if model is None:
-            logger.warning("No model available, using fallback classification")
-            model = StubClassifier()
+        # Extract crops
+        crops = []
+        valid_blocks = []
         
-        predictions = model.predict(block_images)
-        logger.debug(f"Generated {len(predictions)} predictions")
+        for block in blocks:
+            x, y, w, h = block.x, block.y, block.w, block.h
+            
+            # Ensure coordinates are within image bounds
+            x = max(0, min(x, image_bgr.shape[1] - 1))
+            y = max(0, min(y, image_bgr.shape[0] - 1))
+            x2 = max(x + 1, min(x + w, image_bgr.shape[1]))
+            y2 = max(y + 1, min(y + h, image_bgr.shape[0]))
+            
+            if x2 > x and y2 > y:
+                crop = image_bgr[y:y2, x:x2]
+                if crop.size > 0:
+                    crops.append(crop)
+                    valid_blocks.append(block)
         
-        # Combine blocks with predictions
-        typed_blocks = []
-        for block, prediction in zip(blocks, predictions):
-            typed_block = block.copy()
-            typed_block['type'] = prediction
-            typed_blocks.append(typed_block)
+        if not crops:
+            logger.warning("No valid crops extracted from blocks")
+            return []
         
-        # Log classification summary
-        type_counts = {}
-        for block in typed_blocks:
-            block_type = block['type']
-            type_counts[block_type] = type_counts.get(block_type, 0) + 1
+        # Batch preprocess
+        batch = preprocess_batch_for_cnn(crops)
         
-        logger.info(f"Classification summary: {type_counts}")
+        # Run inference
+        try:
+            predictions = model.predict(batch, verbose=0)
+            
+            # Process predictions
+            for block, pred in zip(valid_blocks, predictions):
+                class_idx = int(np.argmax(pred))
+                confidence = float(pred[class_idx])
+                
+                # Use CNN prediction if confidence is high enough
+                if confidence >= CONFIDENCE_THRESHOLD and 0 <= class_idx < len(CLASS_NAMES):
+                    pred_type = CLASS_NAMES[class_idx]
+                    source = "cnn"
+                else:
+                    # Fallback to geometric if confidence too low
+                    pred_type, confidence = classify_by_geometry(block, image_shape)
+                    source = "fallback"
+                
+                typed_blocks.append(TypedBlock(
+                    id=block.id,
+                    x=block.x,
+                    y=block.y,
+                    w=block.w,
+                    h=block.h,
+                    type=pred_type,
+                    confidence=confidence,
+                    source=source
+                ))
+            
+            cnn_count = sum(1 for b in typed_blocks if b.source == "cnn")
+            fallback_count = len(typed_blocks) - cnn_count
+            logger.debug(f"Classified: {cnn_count} by CNN, {fallback_count} by fallback")
+            
+        except Exception as e:
+            logger.error(f"CNN inference failed: {e}")
+            logger.info("Falling back to geometric classifier for all blocks")
+            # Fall through to fallback path
+            model = None
+    
+    # ========================================================================
+    # FALLBACK CLASSIFICATION PATH
+    # ========================================================================
+    if model is None:
+        logger.debug(f"Classifying {len(blocks)} blocks using geometric heuristics")
         
-        return typed_blocks
-        
-    except Exception as e:
-        logger.error(f"Classification failed: {e}")
-        # Return blocks with fallback type
-        return [
-            {**block, 'type': FALLBACK_ELEMENT_TYPE}
-            for block in blocks
-        ]
+        for block in blocks:
+            pred_type, confidence = classify_by_geometry(block, image_shape)
+            
+            typed_blocks.append(TypedBlock(
+                id=block.id,
+                x=block.x,
+                y=block.y,
+                w=block.w,
+                h=block.h,
+                type=pred_type,
+                confidence=confidence,
+                source="fallback"
+            ))
+    
+    return typed_blocks
 
-def validate_model_file(model_path: Path) -> Tuple[bool, str]:
+
+# ============================================================================
+# DIAGNOSTICS
+# ============================================================================
+
+def get_classifier_status(model: Optional[Any]) -> Dict[str, Any]:
     """
-    Validate that a model file is accessible and appears valid.
+    Get diagnostic information about the classifier state.
     
     Args:
-        model_path: Path to the model file
+        model: Loaded model or None
         
     Returns:
-        Tuple of (is_valid, error_message)
+        Dictionary with status information
     """
-    if not model_path.exists():
-        return False, f"Model file not found: {model_path}"
-    
-    if not model_path.is_file() and not model_path.is_dir():
-        return False, f"Model path is neither file nor directory: {model_path}"
-    
-    try:
-        # Check if file is readable
-        with open(model_path, 'rb') as f:
-            f.read(100)  # Read first 100 bytes
-        return True, "Model file appears valid"
-    except PermissionError:
-        return False, f"Permission denied reading model file: {model_path}"
-    except Exception as e:
-        return False, f"Error accessing model file: {e}"
+    return {
+        "tensorflow_available": TF_AVAILABLE,
+        "model_loaded": model is not None,
+        "mode": "cnn" if model is not None else "fallback",
+        "model_input_size": MODEL_INPUT_SIZE,
+        "num_classes": len(CLASS_NAMES),
+        "class_names": CLASS_NAMES,
+        "confidence_threshold": CONFIDENCE_THRESHOLD
+    }
