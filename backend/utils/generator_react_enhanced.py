@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def generate_react_component(ils: Dict[str, Any]) -> str:
     """
-    Generate React component from ILS.
+    Generate React component from ILS with improved formatting and functionality.
     
     Args:
         ils: Intermediate Layout Schema with style
@@ -31,9 +31,10 @@ def generate_react_component(ils: Dict[str, Any]) -> str:
     page_style = ils.get('style', {})
     sections = ils.get('sections', [])
     
-    # Extract colors
+    # Extract colors with fallbacks
     bg_color = page_style.get('background_color', '#f5f6fa')
     primary_color = page_style.get('primary_color', '#2563eb')
+    text_color = page_style.get('text_color', '#111827')
     
     # Generate component parts
     imports = generate_imports(sections)
@@ -41,16 +42,23 @@ def generate_react_component(ils: Dict[str, Any]) -> str:
     handlers = generate_handlers(sections)
     jsx = generate_jsx(sections, page_style)
     
+    # Improved component structure with better formatting
     component = f'''{imports}
 
 export const GeneratedPage = () => {{
+  // State management
 {state_hooks}
+
+  // Event handlers
 {handlers}
 
   return (
     <div 
-      className="min-h-screen flex items-center justify-center p-8"
-      style={{{{ backgroundColor: '{bg_color}' }}}}
+      className="min-h-screen flex items-center justify-center p-4 sm:p-8"
+      style={{{{ 
+        backgroundColor: '{bg_color}',
+        color: '{text_color}'
+      }}}}
     >
       <div className="w-full max-w-7xl">
 {jsx}
@@ -62,7 +70,7 @@ export const GeneratedPage = () => {{
 export default GeneratedPage;
 '''
     
-    logger.info("Generated React component")
+    logger.info("Generated React component with enhanced features")
     return component
 
 

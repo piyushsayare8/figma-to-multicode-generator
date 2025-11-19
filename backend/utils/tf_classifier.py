@@ -46,8 +46,8 @@ CLASS_NAMES = [
 # Model expects 224x224 input
 MODEL_INPUT_SIZE = 224
 
-# Confidence threshold for predictions
-CONFIDENCE_THRESHOLD = 0.5
+# Confidence threshold for predictions - lowered for better detection
+CONFIDENCE_THRESHOLD = 0.3  # Reduced from 0.5 to accept more predictions
 
 # Fallback type for low confidence predictions
 FALLBACK_TYPE = "unknown"
@@ -216,7 +216,7 @@ class TensorFlowUIClassifier:
     
     def _fallback_classify(self, image_bgr: np.ndarray, rect: Dict[str, int]) -> Tuple[str, float, Dict[str, float]]:
         """
-        Fallback geometric-based classification.
+        Fallback geometric-based classification with improved heuristics.
         
         Args:
             image_bgr: Full image
@@ -242,29 +242,78 @@ class TensorFlowUIClassifier:
         # Geometric features
         aspect_ratio = w / h if h > 0 else 1.0
         area = w * h
+        relative_area = area / (img_w * img_h)
         
-        # Simple heuristics
+        # Check if it's at the top of the page (header/heading)
+        is_top = y < img_h * 0.2
+        
+        # Check color variance (images have high variance)
+        gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+        color_variance = np.var(gray_crop)
+        
+        # Improved heuristics
         predicted_type = FALLBACK_TYPE
-        confidence = 0.3
+        confidence = 0.4
         
-        if aspect_ratio > 3.0:
-            predicted_type = "text"
-            confidence = 0.6
-        elif aspect_ratio < 0.5:
-            predicted_type = "image"
-            confidence = 0.5
-        elif 0.8 < aspect_ratio < 1.2 and area < 10000:
-            predicted_type = "button"
-            confidence = 0.5
-        elif aspect_ratio > 1.5 and h < 50:
-            predicted_type = "text_input"
-            confidence = 0.5
-        elif area > 50000:
+        # Very wide elements - likely text or input fields
+        if aspect_ratio > 4.0:
+            if h < 60:
+                predicted_type = "text_input"
+                confidence = 0.65
+            else:
+                predicted_type = "text"
+                confidence = 0.6
+        
+        # Very tall elements - likely images or buttons
+        elif aspect_ratio < 0.4:
+            if area > 30000:
+                predicted_type = "image"
+                confidence = 0.6
+            else:
+                predicted_type = "button"
+                confidence = 0.5
+        
+        # Square-ish elements
+        elif 0.7 < aspect_ratio < 1.4:
+            if area < 5000:
+                predicted_type = "button"
+                confidence = 0.6
+            elif color_variance > 1000:  # High variance suggests image
+                predicted_type = "image"
+                confidence = 0.65
+            else:
+                predicted_type = "card"
+                confidence = 0.55
+        
+        # Moderate aspect ratio
+        elif 1.5 < aspect_ratio < 4.0:
+            if h < 50 and is_top:
+                predicted_type = "heading"
+                confidence = 0.6
+            elif h < 60:
+                predicted_type = "text_input"
+                confidence = 0.6
+            elif area > 20000:
+                predicted_type = "card"
+                confidence = 0.55
+            else:
+                predicted_type = "button"
+                confidence = 0.5
+        
+        # Large areas - likely containers or cards
+        elif relative_area > 0.3:
             predicted_type = "container"
-            confidence = 0.4
+            confidence = 0.5
+        
+        # Top position elements with moderate size
+        elif is_top and w > img_w * 0.3:
+            predicted_type = "heading"
+            confidence = 0.6
+        
+        # Default to text for everything else
         else:
             predicted_type = "text"
-            confidence = 0.4
+            confidence = 0.45
         
         return predicted_type, confidence, {}
 

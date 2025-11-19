@@ -161,7 +161,7 @@ class ILSBuilder:
         
     def analyze_layout_patterns(self, blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Analyze blocks to identify common layout patterns.
+        Analyze blocks to identify common layout patterns with improved detection.
         
         Returns:
             Dictionary containing layout analysis results
@@ -169,29 +169,49 @@ class ILSBuilder:
         if not blocks:
             return {"pattern": "empty", "confidence": 1.0}
         
-        # Count element types
+        # Count element types - more comprehensive
         type_counts = {}
         for block in blocks:
             block_type = block.get('type', 'unknown')
             type_counts[block_type] = type_counts.get(block_type, 0) + 1
         
         # Analyze spatial relationships
-        input_count = type_counts.get('input_field', 0) + type_counts.get('password_input', 0)
+        input_count = type_counts.get('text_input', 0) + type_counts.get('input_field', 0) + type_counts.get('password_input', 0)
         button_count = type_counts.get('button', 0)
-        text_count = type_counts.get('text_block', 0)
+        text_count = type_counts.get('text', 0) + type_counts.get('text_block', 0)
         card_count = type_counts.get('card', 0)
+        image_count = type_counts.get('image', 0) + type_counts.get('image_block', 0)
+        heading_count = type_counts.get('heading', 0)
+        link_count = type_counts.get('link', 0)
+        container_count = type_counts.get('container', 0)
         
-        # Determine primary pattern
-        if input_count >= 2 and button_count >= 1:
-            return {"pattern": "form", "confidence": 0.8}
-        elif card_count >= 2:
-            return {"pattern": "cards", "confidence": 0.7}
-        elif text_count >= 3:
-            return {"pattern": "content", "confidence": 0.6}
-        elif button_count >= 2:
-            return {"pattern": "navigation", "confidence": 0.5}
+        total_elements = len(blocks)
+        
+        # Determine primary pattern with better heuristics
+        if input_count >= 1 and button_count >= 1:
+            # Form pattern: inputs + buttons
+            return {"pattern": "form", "confidence": 0.85}
+        elif card_count >= 2 or (container_count >= 2 and total_elements > 4):
+            # Cards pattern: multiple cards or containers
+            return {"pattern": "cards", "confidence": 0.75}
+        elif image_count >= 2 and total_elements >= 4:
+            # Gallery pattern: multiple images
+            return {"pattern": "gallery", "confidence": 0.7}
+        elif heading_count >= 1 and text_count >= 2:
+            # Content pattern: headings + text
+            return {"pattern": "content", "confidence": 0.7}
+        elif button_count >= 3 or link_count >= 3:
+            # Navigation pattern: multiple buttons/links
+            return {"pattern": "navigation", "confidence": 0.6}
+        elif heading_count >= 1 and (button_count >= 1 or image_count >= 1):
+            # Hero section pattern
+            return {"pattern": "hero", "confidence": 0.65}
+        elif total_elements == 1:
+            # Single element - treat as content
+            return {"pattern": "content", "confidence": 0.8}
         else:
-            return {"pattern": "generic", "confidence": 0.4}
+            # Generic fallback
+            return {"pattern": "content", "confidence": 0.5}
     
     def group_blocks_by_proximity(self, blocks: List[Dict[str, Any]], threshold: int = 50) -> List[List[Dict[str, Any]]]:
         """

@@ -23,7 +23,7 @@ def hex_to_dart_color(hex_color: str) -> str:
 
 def generate_flutter_code(ils: Dict[str, Any]) -> str:
     """
-    Generate complete Flutter main.dart from ILS.
+    Generate complete Flutter main.dart from ILS with improved structure.
     
     Args:
         ils: Intermediate Layout Schema with style
@@ -37,15 +37,17 @@ def generate_flutter_code(ils: Dict[str, Any]) -> str:
     page_style = ils.get('style', {})
     sections = ils.get('sections', [])
     
-    # Extract colors
+    # Extract colors with fallbacks
     bg_color = page_style.get('background_color', '#f5f6fa')
     primary_color = page_style.get('primary_color', '#2563eb')
     accent_color = page_style.get('accent_color', '#f59e0b')
+    text_color = page_style.get('text_color', '#111827')
     
     # Convert to Dart colors
     dart_primary = hex_to_dart_color(primary_color)
     dart_bg = hex_to_dart_color(bg_color)
     dart_accent = hex_to_dart_color(accent_color)
+    dart_text = hex_to_dart_color(text_color)
     
     # Generate parts
     imports = generate_imports()
@@ -72,6 +74,10 @@ class GeneratedApp extends StatelessWidget {{
           background: {dart_bg},
         ),
         scaffoldBackgroundColor: {dart_bg},
+        textTheme: TextTheme(
+          bodyLarge: TextStyle(color: {dart_text}),
+          bodyMedium: TextStyle(color: {dart_text}),
+        ),
         useMaterial3: true,
       ),
       home: const GeneratedPage(),
@@ -92,16 +98,20 @@ class _GeneratedPageState extends State<GeneratedPage> {{
 {dispose_method}
 
   void _handleSubmit() {{
-    // Get form data
-    final data = {{}};
-    // Show success message
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Form submitted successfully!'),
-        backgroundColor: Colors.green,
-      ),
-    );
+    // Validate and get form data
+    if (_formKey.currentState?.validate() ?? false) {{
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Form submitted successfully!'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }}
   }}
+
+  final _formKey = GlobalKey<FormState>();
 
   @override
   Widget build(BuildContext context) {{
@@ -109,15 +119,20 @@ class _GeneratedPageState extends State<GeneratedPage> {{
       appBar: AppBar(
         title: const Text('{title}'),
         elevation: 0,
+        centerTitle: true,
       ),
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 24.0),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 600),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
 {widgets}
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -126,7 +141,7 @@ class _GeneratedPageState extends State<GeneratedPage> {{
 }}
 '''
     
-    logger.info("Generated Flutter code")
+    logger.info("Generated Flutter code with enhanced features")
     return code
 
 

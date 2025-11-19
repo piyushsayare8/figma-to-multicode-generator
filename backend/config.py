@@ -49,10 +49,10 @@ class Config:
         MODEL_PATH = Path(__file__).parent / "models" / "block_cnn_v1.pth"
     
     # Detection Parameters
-    DETECTION_MIN_AREA: int = int(os.getenv("DETECTION_MIN_AREA", "100"))
-    DETECTION_MAX_AREA: int = int(os.getenv("DETECTION_MAX_AREA", "50000"))
-    DETECTION_MIN_ASPECT_RATIO: float = float(os.getenv("DETECTION_MIN_ASPECT_RATIO", "0.2"))
-    DETECTION_MAX_ASPECT_RATIO: float = float(os.getenv("DETECTION_MAX_ASPECT_RATIO", "10.0"))
+    DETECTION_MIN_AREA: int = int(os.getenv("DETECTION_MIN_AREA", "50"))  # Lowered for small UI elements
+    DETECTION_MAX_AREA: int = int(os.getenv("DETECTION_MAX_AREA", "100000"))  # Increased for large sections
+    DETECTION_MIN_ASPECT_RATIO: float = float(os.getenv("DETECTION_MIN_ASPECT_RATIO", "0.1"))  # Wider range
+    DETECTION_MAX_ASPECT_RATIO: float = float(os.getenv("DETECTION_MAX_ASPECT_RATIO", "15.0"))  # Wider range
     
     # Style Analysis Configuration (NEW)
     ENABLE_STYLE_ANALYSIS: bool = os.getenv("ENABLE_STYLE_ANALYSIS", "true").lower() == "true"

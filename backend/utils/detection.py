@@ -27,16 +27,25 @@ def preprocess_image(image_bgr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     
     # Apply Gaussian blur to reduce noise
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
     
-    # Apply adaptive thresholding for better edge detection
-    binary = cv2.adaptiveThreshold(
+    # Use Canny edge detection for precise edges
+    edges = cv2.Canny(blurred, 30, 150)
+    
+    # Dilate edges to connect nearby components
+    kernel = np.ones((3, 3), np.uint8)
+    dilated = cv2.dilate(edges, kernel, iterations=2)
+    
+    # Also create adaptive threshold version
+    adaptive = cv2.adaptiveThreshold(
         blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
     )
     
-    # Optional: Apply morphological operations to connect nearby components
-    kernel = np.ones((3, 3), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    # Combine both methods for comprehensive detection
+    combined = cv2.bitwise_or(dilated, adaptive)
+    
+    # Close gaps
+    binary = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel, iterations=1)
     
     return gray, binary
 
@@ -76,8 +85,8 @@ def filter_contours(contours: List[np.ndarray], image_shape: Tuple[int, int]) ->
         if aspect_ratio < Config.DETECTION_MIN_ASPECT_RATIO or aspect_ratio > Config.DETECTION_MAX_ASPECT_RATIO:
             continue
             
-        # Filter out very thin rectangles (likely noise)
-        if w < 10 or h < 10:
+        # Filter out very thin rectangles (likely noise) - relaxed threshold
+        if w < 5 or h < 5:
             continue
             
         # Filter by solidity (how much the contour fills its convex hull)
@@ -85,7 +94,7 @@ def filter_contours(contours: List[np.ndarray], image_shape: Tuple[int, int]) ->
         hull_area = cv2.contourArea(hull)
         if hull_area > 0:
             solidity = area / hull_area
-            if solidity < 0.3:  # Too irregular
+            if solidity < 0.2:  # Accept more irregular shapes (reduced from 0.3)
                 continue
         
         filtered.append(contour)
@@ -203,8 +212,8 @@ def detect_blocks(image_bgr: np.ndarray) -> List[Dict[str, int]]:
         # Step 1: Preprocess image
         gray, binary = preprocess_image(image_bgr)
         
-        # Step 2: Find contours
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Step 2: Find contours - use TREE to get nested elements
+        contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         logger.debug(f"Found {len(contours)} raw contours")
         
         # Step 3: Filter contours
