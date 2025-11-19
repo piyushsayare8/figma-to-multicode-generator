@@ -23,7 +23,7 @@ import io
 
 from config import Config, UI_ELEMENT_TYPES
 from utils.detection import detect_blocks
-from utils.classifier_enhanced import load_model, classify_blocks
+from utils.tf_classifier import load_model, classify_blocks
 from utils.ils_builder import build_ils
 from utils.style_analyzer import analyze_style
 from utils.generator_html_css_enhanced import generate_plain_html_and_css

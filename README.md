@@ -1,6 +1,6 @@
 # Figma to Multicode Generator ✨
 
-A sophisticated Computer Vision + CNN + template-based system that converts UI screenshots into multiple code outputs with an enhanced, modern user experience.
+A sophisticated AI-powered system that converts UI screenshots into multiple code formats using Computer Vision (OpenCV) and a trained CNN model (TensorFlow/Keras).
 
 ## 🚀 Features
 
@@ -9,6 +9,12 @@ A sophisticated Computer Vision + CNN + template-based system that converts UI s
 - **HTML + CSS** - Classic vanilla CSS approach
 - **React JSX** - Component-based React code
 - **Flutter/Dart** - Cross-platform mobile development
+
+### AI-Powered Classification
+- 🧠 **Trained TensorFlow Model** for accurate UI element detection
+- 🎯 **9 UI Element Types**: button, input, text, heading, image, card, link, password input, and background
+- 📊 **Confidence Scoring** for prediction reliability
+- 🔄 **Automatic Fallback** to geometric classifier if model unavailable
 
 ### Enhanced User Experience
 - 🎨 **Modern Dark UI** with gradient backgrounds and glass morphism
@@ -42,14 +48,17 @@ A sophisticated Computer Vision + CNN + template-based system that converts UI s
 
 ```
 ├── backend/              # FastAPI server
-│   ├── app.py           # Main API application
+│   ├── app_new.py       # Main API application
 │   ├── config.py        # Configuration settings
 │   ├── requirements.txt # Python dependencies
+│   ├── models/          # Trained model directory
+│   │   ├── ui_classification_model.h5  # Your trained model
+│   │   └── README.md    # Model placement instructions
 │   └── utils/           # Core processing modules
-│       ├── classifier.py      # CNN classification
-│       ├── detection.py       # OpenCV detection
+│       ├── tf_classifier.py   # TensorFlow model integration
+│       ├── detection.py       # OpenCV block detection
 │       ├── generator_*.py     # Code generators
-│       └── ils_builder.py     # Layout builder
+│       └── ils_builder.py     # Layout schema builder
 ├── frontend/            # React + Vite application
 │   ├── src/
 │   │   ├── components/  # Reusable UI components
@@ -64,27 +73,57 @@ A sophisticated Computer Vision + CNN + template-based system that converts UI s
 │   │   ├── index.css    # Enhanced styles & animations
 │   │   └── main.jsx     # Application entry point
 │   └── package.json     # Frontend dependencies
+└── MODEL_INTEGRATION.md # Detailed model integration guide
 ```
 
 ## 🚀 Getting Started
 
-### Backend Setup
+### Prerequisites
+
+- Python 3.8+
+- Node.js 16+
+- Trained model file: `ui_classification_model.h5`
+
+### Step 1: Setup Trained Model
+
+1. **Place your trained model** in the backend models directory:
+   ```bash
+   cp ui_classification_model.h5 backend/models/
+   ```
+
+2. **Verify model specifications**:
+   - Input shape: `(None, 224, 224, 3)`
+   - 9 output classes (background, button, card, heading, image_block, input_field, link, password_input, text_block)
+
+📖 See [MODEL_INTEGRATION.md](backend/MODEL_INTEGRATION.md) for detailed integration guide.
+
+### Step 2: Backend Setup
 
 ```bash
 cd backend
+
+# Create virtual environment
 python -m venv .venv
 
+# Activate environment
 # Windows
 .venv\Scripts\activate
-
 # Linux/macOS
 source .venv/bin/activate
 
+# Install dependencies (includes TensorFlow)
 pip install -r requirements.txt
-uvicorn app:app --reload --host 0.0.0.0 --port 8000
+
+# Start the server
+uvicorn app_new:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Frontend Setup
+**Or use the automated script (Windows):**
+```bash
+.\run_backend.ps1
+```
+
+### Step 3: Frontend Setup
 
 ```bash
 cd frontend
@@ -167,24 +206,49 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 **Built with ❤️ using React, Tailwind CSS, and modern web technologies**
 
-## 4. Typical Flow
+## 5. Technical Architecture
 
-1. Start the backend (FastAPI).
-2. Start the frontend (Vite).
-3. Open the frontend, upload a UI screenshot (PNG/JPG).
-4. Backend:
-   - Uses OpenCV to detect candidate UI blocks.
-   - Classifies each block (stub or your CNN).
-   - Builds an Intermediate Layout Schema (ILS) from blocks.
-   - Generates multi-code output from ILS (HTML/Tailwind, HTML+CSS, React, Dart).
-5. Frontend displays:
-   - Live HTML/Tailwind preview in an iframe.
-   - Tabs for viewing and copying each code variant.
-   - Download buttons for raw code.
+### Backend Pipeline
 
-## 5. Notes
+1. **Image Upload** → User uploads UI screenshot via API
+2. **OpenCV Detection** → Detects UI element bounding boxes
+3. **TensorFlow Classification** → Trained model classifies each element
+4. **Style Analysis** → Extracts colors, spacing, and visual properties
+5. **ILS Builder** → Creates Intermediate Layout Schema
+6. **Code Generation** → Generates code in multiple frameworks
 
-- This is a **starter production-style project**. You are expected to:
-  - Build & train the CNN for UI block classification.
-  - Improve detection heuristics and ILS logic for more complex layouts.
-- All core pieces are modular and testable.
+### Model Training Process
+
+The CNN model was trained with:
+- **Dataset**: Real and synthetic UI screenshots
+- **Classes**: 9 UI element types
+- **Architecture**: Custom CNN with transfer learning
+- **Training**: 30-100 epochs on labeled UI components
+- **Validation**: Accuracy and confidence scoring
+
+### Classification Classes
+
+| Class           | Description              | UI Type     |
+|-----------------|--------------------------|-------------|
+| background      | Background containers    | container   |
+| button          | Action buttons           | button      |
+| card            | Card components          | card        |
+| heading         | Heading text             | heading     |
+| image_block     | Image placeholders       | image       |
+| input_field     | Text input fields        | text_input  |
+| link            | Hyperlinks               | link        |
+| password_input  | Password input fields    | text_input  |
+| text_block      | Regular text content     | text        |
+
+## 6. Notes & Customization
+
+### Model Integration
+- Place your trained `.h5` model in `backend/models/`
+- System automatically falls back to geometric classifier if model unavailable
+- Adjust confidence threshold in `tf_classifier.py` if needed
+
+### Extending the System
+- **Add new frameworks**: Create new generator in `utils/generator_*.py`
+- **Improve detection**: Enhance OpenCV logic in `detection.py`
+- **Retrain model**: Use more training data for better accuracy
+- **Custom UI elements**: Update CLASS_NAMES and retrain model
